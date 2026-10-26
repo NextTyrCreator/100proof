@@ -4,7 +4,7 @@ Film a 90-second walkthrough of your home. Get back a verifiable, insurance-grad
 
 **Built for the Meta Global AI Developer Hackathon, Oct 26 – Nov 4, 2026.** All code in this repository was written during the event. First commit: `2026-10-26T17:20:01Z` (`9a51175`). Index of what was built: [`docs/BUILT_DURING_HACKATHON.md`](docs/BUILT_DURING_HACKATHON.md).
 
-Meta Model API: SAM 3.1 (detect, mask, track) · Muse Spark 1.3 (video → items) · Muse Wonder (household agents) · Muse Image (catalog shots) · Muse Spark Open via Baseten (receipt parsing, open-weight stage).
+Meta Model API: SAM 3.1 (detect, mask, track) · Muse Spark 1.3 (video → items, receipt parsing) · Muse Wonder (household agents) · Muse Image (catalog shots).
 
 Demo: https://demo.100proof.tech · Architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md) (pre-event planning; no code).
 
@@ -18,7 +18,7 @@ Demo: https://demo.100proof.tech · Architecture: [`ARCHITECTURE.md`](ARCHITECTU
 | `packages/meta-client` | Meta Model API wrapper: model IDs, retries, rate limits, cost accounting |
 | `packages/insurance` | ISO/HOB special-limit tables, category taxonomy, depreciation tables |
 | `packages/ui` | Shared components, skeletons, design tokens |
-| `infra` | docker-compose, Fly/Vercel config, Modal/Baseten endpoints |
+| `infra` | docker-compose, Fly.io config |
 | `samples` | Staged sample rooms and synthetic receipts (recorded during the event) |
 | `docs` | Engineering standards, ADRs, env register, judging map, build log |
 | `legal` | Privacy Policy, Terms of Service, cookie spec, data inventory (drafts) |

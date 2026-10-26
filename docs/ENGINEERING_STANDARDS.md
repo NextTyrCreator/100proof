@@ -25,7 +25,7 @@ Each rule has an owner (the PR author), a check (what CI or the reviewer verifie
 - Numeric IDs are never exposed; primary keys are ULIDs/UUIDs. Lookups by `slug`/`token` go through constant-time comparison.
 
 ### 1.4 Secrets, signing and tokens
-- Secrets live in Vercel/Fly/GitHub Actions secrets and in the protected register Steven keeps outside the repo. `.env.example` lists every variable; `docs/ENV_VARIABLES.md` documents each one. A new variable without a register entry fails review.
+- Secrets live in Fly and GitHub Actions secrets and in the protected register Steven keeps outside the repo. `.env.example` lists every variable; `docs/ENV_VARIABLES.md` documents each one. A new variable without a register entry fails review.
 - **Share links** (`/p/<token>`): token = random 256-bit value stored hashed (SHA-256) with `expires_at`, `recipient`, `max_views`; the URL carries the raw token once. Revoking deletes the hash. Packet renders are keyed to the token so revocation also invalidates the stored render.
 - **Integrity hashes**: SHA-256 over canonical JSON (sorted keys, fixed number formatting) for scans, masters and packets; audit rows carry `prev_hash` (hash chain). `UPDATE`/`DELETE` are revoked on `audit_log` for all roles.
 - **OAuth tokens** (Gmail, Drive): encrypted at rest with AES-256-GCM using a per-user data key wrapped by `TOKEN_MASTER_KEY` (envelope encryption); decrypted only in the worker, never logged, revoked at the provider on disconnect. Scopes are the narrowest that work (`gmail.readonly`, `drive.readonly`).
@@ -33,7 +33,7 @@ Each rule has an owner (the PR author), a check (what CI or the reviewer verifie
 - Webhooks (Inngest, Supabase) verify signatures; replay protection via timestamp + nonce.
 
 ### 1.5 Transport and browser hardening
-- HTTPS only; **HSTS** with `includeSubDomains; preload`; TLS 1.2 minimum (Vercel/Fly defaults).
+- HTTPS only; **HSTS** with `includeSubDomains; preload`; TLS 1.2 minimum (Fly defaults).
 - Security headers set in `next.config` middleware: strict **CSP** with nonces (no `unsafe-inline` for scripts), `frame-ancestors 'none'`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` granting `camera=(self)` and `microphone=(self)` only on the capture route, `X-Content-Type-Options: nosniff`.
 - CSRF: server actions use SameSite cookies plus an Origin check; state-changing route handlers require the same.
 - The packet viewer (`/p/*`) and `/verify` run on the same origin but with a **read-only Supabase client** and no cookies required.
@@ -65,10 +65,10 @@ Each rule has an owner (the PR author), a check (what CI or the reviewer verifie
 | Metric | Budget | Where measured |
 | --- | --- | --- |
 | LCP | < 2.0 s (4G, mid-tier phone) | Lighthouse CI |
-| INP | < 200 ms | Lighthouse CI + Vercel Speed Insights |
+| INP | < 200 ms | Lighthouse CI |
 | CLS | < 0.1 | Lighthouse CI |
 | JS per route (gz) | < 170 KB initial | `size-limit` in CI |
-| API p95 (non-model) | < 300 ms | Vercel/Fly logs |
+| API p95 (non-model) | < 300 ms | Fly logs |
 | Time to first item on screen after upload | < 20 s | Worker metric |
 | Full 90 s scan to reviewable list | < 3 min | Worker metric |
 
@@ -107,16 +107,16 @@ Each rule has an owner (the PR author), a check (what CI or the reviewer verifie
 - Frame sampling is adaptive (2 fps keyframes, full rate only on dense segments) so per-scan cost and time stay flat as users grow.
 
 ### 2.7 CDN and static files
-- `apps/web` static output and `/_next/static` are served by Vercel's edge CDN; Supabase Storage objects served through its CDN with image transforms for thumbnails; the coming-soon root is fully static.
+- `apps/web` and `/_next/static` are served by the Fly app; Supabase Storage holds originals; the worker's `sharp` pipeline makes thumbnails (Supabase Free has no image transforms); the coming-soon root is fully static.
 
 ### 2.8 Measurement
-- Vercel Speed Insights and Web Vitals reporting on in production; `/health` page checks each Meta model, Supabase and Inngest; Sentry performance traces on the scan pipeline.
+- `/health` checks each Meta model, Supabase, and Inngest; Sentry performance traces on the scan pipeline. Web Vitals are measured with Lighthouse, not a hosted analytics vendor.
 - `scripts/perf/measure.sh <url> <label>` before and after any page change; the two JSON files are referenced in the PR.
 
 ## 3. Data
 - Evidence (video, frames, masks, receipts) is immutable once sealed; corrections create new versions that reference the prior one.
 - Retention: user-controlled; deletion is a tombstone plus hard delete of media within 30 days; the audit log keeps hashes only.
-- Backups: Supabase PITR enabled; migrations are forward-only and reviewed; destructive migrations need an ADR.
+- Backups: the hackathon stays on Supabase Free, which has no PITR (ADR 0005). Migrations are forward-only and reviewed; destructive migrations need an ADR. Do not upgrade to Pro to turn PITR on for the demo.
 - Synthetic data only in `samples/`, fixtures and the public demo.
 
 ## 4. Observability

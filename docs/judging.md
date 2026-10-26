@@ -6,8 +6,7 @@ Every feature maps to at least one rubric criterion; anything that maps to nothi
 | --- | --- | --- | --- | --- | --- |
 | 90-s walkthrough → inventory (SAM 3.1 + Spark) | x | x | x | x | |
 | Ask-then-re-inventory loop | x | x | x | | |
-| Receipt matching (Gmail/Drive) + valuation ladder | x | x | | x | |
-| Receipt parsing on Muse Spark Open (Baseten) | | x | | | Open-weight |
+| Receipt matching (Gmail/Drive) + valuation ladder, parsed by Muse Spark 1.3 | x | x | | x | |
 | Sealed scans, Masters, Packets, /verify | x | | x | x | |
 | Household agents (Muse Wonder) | x | x | x | | Agentic |
 | Muse Image catalog shots | | x | x | | Creative |

@@ -63,7 +63,7 @@ Every PR is checked against `docs/ENGINEERING_STANDARDS.md`. The PR template car
 
 ## Secrets and data
 
-No secrets in the repo, ever. `.env.example` lists every variable with a placeholder; real values live in Vercel, Fly and GitHub Actions secrets and in Steven's protected register. Demo and test data are synthetic; no real policyholder video, receipts or names.
+No secrets in the repo, ever. `.env.example` lists every variable with a placeholder; real values live in Fly and GitHub Actions secrets and in Steven's protected register. Demo and test data are synthetic; no real policyholder video, receipts or names. The only GitHub account is NextTyrCreator.
 
 ## Licenses
 

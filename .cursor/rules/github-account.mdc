@@ -1,0 +1,10 @@
+---
+description: GitHub identity for 100proof. One account only.
+alwaysApply: true
+---
+
+The only GitHub account for this repository is NextTyrCreator (`github.com/NextTyrCreator/100proof`).
+
+Never add, invite, mention, fork to, or attribute `steven-prodactive-dev`. That account is not an option. Do not add `steve@prodactive.co.uk` to NextTyrCreator, and do not use it as the author or committer of a commit in this repo.
+
+Commit as `Steven Blackburn <tyrfounder@gmail.com>` by passing the author and committer on that command. Do not change global or local git config to do it.

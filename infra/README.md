@@ -1,3 +1,3 @@
 # infra
 
-docker-compose for local Supabase + worker, fly.toml, vercel.json, Baseten/Modal endpoint definitions.
+docker-compose for local Supabase + worker, and fly.toml for the single Fly.io app (web + worker).

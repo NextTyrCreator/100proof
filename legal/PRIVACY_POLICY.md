@@ -20,7 +20,7 @@
 We do not collect payment details in the hackathon build. We do not use session replay.
 
 ## 2. Who processes your data (sub-processors)
-Every tool is listed in `legal/DATA_INVENTORY.md`. In summary: Supabase (database, file storage, authentication; US region), Vercel (hosting, CDN, performance analytics), Meta Platforms (Meta Model API: video, images and text are sent to recognize items, read receipts and draft documents; we use Standard mode, which Meta states does not use our content to train its models), Baseten (open-weight model inference for receipt parsing), Inngest (background job metadata, not media), Sentry (error reports with personal data scrubbed), Google (sign-in and read-only Gmail/Drive access you authorize), Resend (transactional email). We do not sell personal data and do not share it for advertising.
+Every tool is listed in `legal/DATA_INVENTORY.md`. In summary: Supabase (database, file storage, authentication; US region, Free plan), Fly.io (web app and worker hosting), Meta Platforms (Meta Model API: video, images and text are sent to recognize items, read receipts and draft documents; we use Standard mode, which Meta states does not use our content to train its models), Inngest (background job metadata, not media), Sentry (error reports with personal data scrubbed), Google (sign-in and read-only Gmail/Drive access you authorize), Resend (transactional email). We do not sell personal data and do not share it for advertising.
 
 ## 3. Your choices and rights
 - Connect or disconnect Gmail/Drive at any time; disconnecting revokes our access at Google and deletes cached evidence.

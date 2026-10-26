@@ -8,6 +8,7 @@ Judges: this table is the index of original contributions. Each row links to the
 | Date | Feature | PR | Meta models | AI tooling | Notes |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-26 | Repository governance, engineering standards, legal drafts, env register, CI | bootstrap on `main` | — | Cursor (Grok 4.7) | No product code yet. Landed before branch protection. |
+| 2026-10-26 | Account boundary: NextTyrCreator only; Supabase Free + one Fly machine; no Vercel, Baseten, or Modal | this commit | — | Cursor (Grok 4.7) | ADR 0005 |
 
 ## Not built during the hackathon (for clarity)
 - Pre-event planning: `ARCHITECTURE.md` (written Oct 26 before kickoff). No code.
