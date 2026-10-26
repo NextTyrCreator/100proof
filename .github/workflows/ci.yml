@@ -1,0 +1,35 @@
+name: ci
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Commit messages (PR)
+        if: github.event_name == 'pull_request'
+        run: pnpm exec commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+      - name: No secrets under NEXT_PUBLIC_
+        run: |
+          if grep -rEn 'NEXT_PUBLIC_[A-Z_]*(SERVICE_ROLE|SECRET|API_KEY|MASTER_KEY|TOKEN)' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.env*' --include='*.md' . --exclude-dir=node_modules --exclude-dir=.git | grep -v 'docs/ENV_VARIABLES.md' | grep -v 'ci.yml'; then echo 'Secret-looking variable under NEXT_PUBLIC_'; exit 1; fi
+      - name: No raw SQL concatenation
+        run: |
+          if grep -rEn 'sql\.raw\(`[^`]*\$\{' --include='*.ts' apps packages 2>/dev/null; then echo 'sql.raw with interpolation found'; exit 1; fi
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm deadcode
+      - run: pnpm licenses
+      - name: Lighthouse CI (demo routes)
+        if: github.event_name == 'pull_request' && github.base_ref == 'dev'
+        run: echo "lhci autorun --config=lighthouserc.json  # enabled once apps/web exists"

@@ -1,0 +1,2 @@
+# Placeholder until the day-1 vertical slice lands. Local stack: Supabase CLI (postgres, storage, auth) + worker.
+services: {}

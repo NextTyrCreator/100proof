@@ -1,0 +1,13 @@
+{
+  "ci": {
+    "collect": { "url": ["http://localhost:3000/", "http://localhost:3000/app", "http://localhost:3000/app/scans"], "numberOfRuns": 3, "startServerCommand": "pnpm --filter web start" },
+    "assert": { "assertions": {
+      "largest-contentful-paint": ["error", { "maxNumericValue": 2000 }],
+      "interaction-to-next-paint": ["error", { "maxNumericValue": 200 }],
+      "cumulative-layout-shift": ["error", { "maxNumericValue": 0.1 }],
+      "total-byte-weight": ["warn", { "maxNumericValue": 1500000 }],
+      "unused-javascript": ["warn", { "maxNumericValue": 100000 }]
+    } },
+    "upload": { "target": "temporary-public-storage" }
+  }
+}
