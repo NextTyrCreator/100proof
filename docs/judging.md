@@ -4,7 +4,7 @@ Every feature maps to at least one rubric criterion; anything that maps to nothi
 
 | Feature | Impact | Meta tooling | Demo | Tech depth | Bonus |
 | --- | --- | --- | --- | --- | --- |
-| 90-s walkthrough → inventory (SAM 3.1 + Spark) | x | x | x | x | |
+| 100-s walkthrough → inventory (SAM 3.1 + Spark) | x | x | x | x | |
 | Ask-then-re-inventory loop | x | x | x | | |
 | Receipt matching (Gmail/Drive) + valuation ladder, parsed by Muse Spark 1.3 | x | x | | x | |
 | Sealed scans, Masters, Packets, /verify | x | | x | x | |

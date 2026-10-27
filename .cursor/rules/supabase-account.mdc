@@ -1,0 +1,10 @@
+---
+description: Supabase for 100proof is one dev project and one login.
+alwaysApply: true
+---
+
+This repository uses one Supabase project: `100proof-dev`, reference `rsuoqojbhbisiymogaqy`. The connection is `.cursor/mcp.json` server `supabase-100proof`.
+
+The dashboard login for that project must be `steven@buhrn.com`. If a tool, URL, or login shows any other account or any other project ref, stop and tell Steven. Do not create tables, run SQL, or change settings on it.
+
+Do not use the global Cursor Supabase server from this repo. Do not change that global server. Do not put this project's keys in git.

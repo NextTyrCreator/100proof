@@ -14,6 +14,7 @@
 | Receipts and order emails from Gmail/Drive you connect (read-only; only messages matching receipt searches; message IDs, parsed fields, attachment hashes) | To confirm item values | Consent (you connect the source) | Until you disconnect the source or delete the item |
 | Inventory records, valuations, Masters, Packets, share-link access logs | To keep and let you share your inventory | Contract; legitimate interest in integrity | Until you delete them; audit log keeps hashes only |
 | Technical: IP address class, device type, browser, timestamps, error reports | Security, rate limiting, debugging | Legitimate interest | 90 days (logs); errors 30 days |
+| Precise location and the address of the insured property | To record where that walkthrough was filmed and compare it with the address you enter. Locate me is one reading, not a continuous track, and those coordinates stay in the browser. The address text may be sent to Photon (OpenStreetMap data) to match a map point. | Consent | Browser session; deleted when the session ends |
 | Usage analytics (page views, Web Vitals) | To make the product faster | Consent in EU/UK; legitimate interest in US with opt-out | 13 months |
 | Cookie consent record | To remember your choice | Legal obligation | 12 months |
 

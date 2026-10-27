@@ -1,0 +1,8 @@
+---
+description: 100proof logo, palette, and motion are fixed.
+alwaysApply: true
+---
+
+The logo is `packages/ui/brand/logo.jpg`. Colors and motion come only from `packages/ui/brand/tokens.css`. Read `packages/ui/BRAND.md` before building UI.
+
+Do not introduce another palette, another easing, or a redrawn wordmark. Teal means verified. The gradient is reserved for the mark, the primary action, and verification progress.

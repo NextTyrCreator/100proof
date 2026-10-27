@@ -4,7 +4,7 @@ Updated in the same PR that adds, removes or reconfigures a tool. This table fee
 
 | Tool | Purpose | Data it receives | Region | Transfer basis (EU) | Status |
 | --- | --- | --- | --- | --- | --- |
-| Supabase | Postgres, Storage, Auth | Account data, inventory records, video/frames/crops, receipts metadata, encrypted OAuth tokens | US | SCCs | Active (Free plan) |
+| Supabase | Postgres, Storage, Auth | Account email for one-time-code login; insurer inquiry company, contact, and work email; inventory records, video/frames/crops, receipts metadata, encrypted OAuth tokens | US | SCCs | Active (Free plan) |
 | Fly.io | Web app and worker hosting | Request logs (IP, UA) | US (`iad`) | SCCs | Active |
 | Meta Model API (Meta Platforms) | SAM 3.1, Muse Spark, Muse Wonder, Muse Image, Voice Transcribe, receipt parsing | Video, frames, crops, receipt text, narration audio, prompts; Standard mode (no training) | US | SCCs/DPF | Active |
 | Inngest | Background jobs | Job payload metadata (IDs, timestamps), never media | US | SCCs | Active |
@@ -15,3 +15,5 @@ Updated in the same PR that adds, removes or reconfigures a tool. This table fee
 | Stripe | Payments | None in hackathon build | — | — | Not used |
 | Session replay (any vendor) | — | — | — | — | Not used, by policy |
 | Advertising / tracking pixels | — | — | — | — | Not used, by policy |
+| Browser Geolocation API | One reading when the person presses Locate me, kept with that inventory | Latitude, longitude, accuracy in meters, time | On the device | Not transferred by 100proof | Active, user-initiated, browser session only |
+| Photon (Komoot, OpenStreetMap) | Match a typed address to a map point so distance from the device reading can be shown | Address text the person types. Device coordinates are not sent. | EU | Not a stored transfer; the query leaves the browser | Active, user-initiated |

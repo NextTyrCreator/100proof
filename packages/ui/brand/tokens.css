@@ -1,0 +1,33 @@
+/* 100proof visual system. ADR 0006. Do not add colors outside this file. */
+
+:root {
+  --proof-navy: #0b1f3a;
+  --proof-blue: #1a6dff;
+  --proof-cyan: #00c4ff;
+  --proof-teal: #00d4b8;
+  --proof-surface: #ffffff;
+  --proof-surface-soft: #f7f9fc;
+  --proof-text-secondary: #5a6a7e;
+
+  --proof-gradient: linear-gradient(90deg, var(--proof-blue) 0%, var(--proof-cyan) 52%, var(--proof-teal) 100%);
+
+  --proof-font: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --proof-radius-control: 12px;
+  --proof-radius-card: 16px;
+  --proof-shadow: 0 8px 30px rgb(11 31 58 / 6%);
+
+  --proof-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --proof-duration-fast: 180ms;
+  --proof-duration: 320ms;
+  --proof-duration-slow: 560ms;
+  --proof-stagger: 40ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --proof-duration-fast: 1ms;
+    --proof-duration: 1ms;
+    --proof-duration-slow: 1ms;
+    --proof-stagger: 0ms;
+  }
+}
