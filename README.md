@@ -1,6 +1,6 @@
 # 100proof
 
-Film a 100-second walkthrough of your home. Get back a verifiable, insurance-grade personal property inventory: every item recognized, counted, valued from your own receipts where they exist, bucketed into the categories insurers already use, and sealed so a carrier can verify it without taking anyone's word for it.
+Film a walkthrough of your property, up to 5 minutes, in 30-second clips. Get back an automated inventory you can prove: rooms and items recognized, counted, priced for replacement, and kept with the video so a carrier can review the record. 100proof does not decide coverage.
 
 **Built for the Meta Global AI Developer Hackathon, Oct 26 – Nov 4, 2026.** All code in this repository was written during the event. First commit: `2026-10-26T17:20:01Z` (`9a51175`). Index of what was built: [`docs/BUILT_DURING_HACKATHON.md`](docs/BUILT_DURING_HACKATHON.md).
 

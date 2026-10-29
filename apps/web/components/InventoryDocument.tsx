@@ -7,14 +7,20 @@ import {
   formatClock,
   formatMoney,
   formatWhen,
+  cashValueTotal,
+  replacementTotal,
   inventoryCsv,
   inventoryLabel,
+  milesBetween,
   proofText,
   videoExtension,
   type HomeInventory,
   type ScanClip,
 } from "../lib/inventory";
+import { addressRegionLabel } from "../lib/address-search";
+import { AddressLine } from "./AddressLine";
 import { useInventory } from "./InventoryProvider";
+import { ItemizedRooms } from "./ItemizedRooms";
 
 function downloadProof(inventory: HomeInventory) {
   const blob = new Blob([inventoryCsv(inventory)], { type: "text/csv;charset=utf-8" });
@@ -40,7 +46,7 @@ const steps = [
   },
   {
     title: "Record",
-    body: "Begin scan and record up to 100 seconds, captured at that moment and kept with this account.",
+    body: "Record up to 5 minutes, in 30-second clips. Pause and continue until you are done.",
   },
   {
     title: "Recognize",
@@ -64,7 +70,7 @@ function createdOn(inventory: HomeInventory) {
 
 export function InventoryDocument() {
   const router = useRouter();
-  const { inventories, selected, startInventory, selectInventory, renameRoom, deleteRoomItem } = useInventory();
+  const { inventories, selected, startInventory, selectInventory, renameRoom, deleteRoomItem, updateRoomItem, addRoomItem } = useInventory();
   const [openId, setOpenId] = useState<string | null>(null);
   const [openedId, setOpenedId] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -158,7 +164,15 @@ export function InventoryDocument() {
       {opened ? (
       <article className="sheet">
         <p className="total-label">{inventoryLabel(opened)}</p>
-        {opened.homeAddress.trim() ? <p className="confirm-address">{opened.homeAddress.trim()}</p> : null}
+        {addressRegionLabel(opened.addressRegion) ? (
+          <p className="confirm-address">{addressRegionLabel(opened.addressRegion)}</p>
+        ) : null}
+        {opened.homeAddress.trim() ? (
+          <AddressLine
+            address={opened.homeAddress.trim()}
+            miles={opened.place && opened.addressPoint ? milesBetween(opened.place, opened.addressPoint) : null}
+          />
+        ) : null}
         {opened.recordHash ? <p className="record-hash">Record {opened.recordHash}</p> : null}
         <ul className="rooms">
           {clips.map((clip, index) => {
@@ -233,42 +247,29 @@ export function InventoryDocument() {
             );
           })}
         </ul>
-        {opened.rooms.length > 0 ? (
-          <ul className="rooms">
-            {opened.rooms.map((room) => (
-              <li key={room.id} className="room">
-                <label className="field">
-                  <span>Room</span>
-                  <input
-                    value={room.title}
-                    maxLength={80}
-                    onChange={(event) => renameRoom(opened.id, room.id, event.target.value)}
-                  />
-                </label>
-                <ul className="item-list">
-                  {room.items.map((item) => (
-                    <li key={item.id}>
-                      <span>
-                        {item.name}
-                        {item.serial ? ` · ${item.serial}` : ""}
-                        {item.age ? ` · ${item.age}` : ""}
-                        {item.priceUsd == null ? "" : ` · ${formatMoney(item.priceUsd)}`}
-                      </span>
-                      <button type="button" className="text-button" onClick={() => deleteRoomItem(opened.id, room.id, item.id)}>
-                        Delete
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="empty-line">
-            No rooms listed yet. Rooms are read from a change of room in the video, or from the room you narrate.
-          </p>
-        )}
+        <ItemizedRooms
+          inventoryId={opened.id}
+          rooms={opened.rooms}
+          address={opened.homeAddress}
+          region={addressRegionLabel(opened.addressRegion)}
+          onRenameRoom={renameRoom}
+          onDeleteItem={deleteRoomItem}
+          onUpdateItem={updateRoomItem}
+          onAddItem={addRoomItem}
+        />
         <div className="sheet-actions">
+          {opened.place ? (
+            <button
+              type="button"
+              className="button quiet"
+              onClick={() => {
+                selectInventory(opened.id);
+                router.push("/scan?add=1");
+              }}
+            >
+              Scan again
+            </button>
+          ) : null}
           <button type="button" className="button brand" aria-expanded={summaryOpen} onClick={() => setSummaryOpen((open) => !open)}>
             View summary
           </button>
@@ -282,6 +283,14 @@ export function InventoryDocument() {
           <p className="total-note">
             Download the inventory, email it, or send it. 100proof does not decide coverage, and this file is not a
             sworn proof of loss.
+          </p>
+          <p className="summary-total">
+            <span>Replacement estimate</span>
+            <span>{replacementTotal(opened) > 0 ? formatMoney(replacementTotal(opened)) : "—"}</span>
+          </p>
+          <p className="summary-total">
+            <span>Cash value estimate</span>
+            <span>{cashValueTotal(opened) > 0 ? formatMoney(cashValueTotal(opened)) : "—"}</span>
           </p>
           <p className="summary-total">
             <span>Entered total</span>

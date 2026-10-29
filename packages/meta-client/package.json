@@ -1,0 +1,9 @@
+{
+  "name": "@100proof/meta-client",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

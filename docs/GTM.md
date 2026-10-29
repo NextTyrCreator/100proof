@@ -1,12 +1,40 @@
 # Go to market
 
-Checked 2026-10-27. This is the record for the hook, the figures, the accuracy goals, and competitor claims. Update it when a source or a claim changes. Do not paste a figure onto the site until it is in this file with a source or an explicit “our estimate” label.
+Checked 2026-10-28. This is the record for the hook, the figures, the accuracy goals, and competitor claims. Update it when a source or a claim changes. Do not paste a figure onto the site until it is in this file with a source or an explicit “our estimate” label.
 
 ## Hook
 
-Most people are underinsured. Don't be like them. Create an entire verifiable personal inventory in 100 seconds and rest assured.
+Most people are underinsured. Don't be like them. Take a video. Get an automated inventory with verified proof, and insure it properly.
 
-The walkthrough is 100 seconds. Do not write 90 seconds.
+The name 100proof is the brand. It means a record you can show. It is not a timer, and it is not a claim that the list is 100% accurate. A session records up to 5 minutes, in 30-second clips. Do not write “in 100 seconds” as the product limit. Do not write “100% accurate,” “100% proof” as a measured score, or that 100proof decides coverage or binds a policy. The honest close is that the person uses the inventory to insure properly. The carrier still decides what the policy pays.
+
+## Hackathon
+
+Checked 2026-10-28 against the Meta and Cerebral Valley event page and the published waiver summary. Judges score the finished project, not the application.
+
+| Weight | Criterion | What it asks | What 100proof shows |
+| --- | --- | --- | --- |
+| 30% | Impact | Who it helps, how much it matters, whether people would use it, and whether it fits a theme. | Build for Your World. Contents claims stall when there is no list. NAIC and Texas already tell people to film the rooms. The product does that job. |
+| 25% | Meta AI tooling | Creative use, past a thin wrapper. | Muse Spark itemizes each 30-second clip, in order, then prices replacement from the zip and jurisdiction. The video is the input. The inventory is the output. |
+| 25% | Demo | A working demo that holds up live, plus the demo video. | One path: film, pause, record, and the list appears from those clips in order. Say what the model does not decide. |
+| 20% | Technical depth | Sound engineering, refined on purpose. | Clips stay small enough to review. Location is a range, not a published coordinate. The person keeps or corrects every line. |
+
+Indie judging looks for creativity, ambition, and whether it works. Startup judging looks for execution and whether it would hold up in production. Large hackathons are usually won by one live loop a judge can follow, a problem with a source, and an honest limit. A long feature list loses to that loop. A demo video should be the same path: real video in, inventory out.
+
+The line to say in the room: take a video of the property, get an automated inventory with verified proof, and insure it properly. The line not to say: the inventory is 100% accurate, or the policy is bound.
+
+## Next plan
+
+A technical product plan is coming in after this commit. Read it as a proposal. Keep the parts that make the record accurate enough that someone will pay for it, and that make the product likable enough to tell someone else about. Drop the parts that fight the product already built.
+
+These stay:
+
+- A session is 5 minutes. It is filmed in 30-second clips. The person can pause and record again until they are done, or until the session sits for 15 minutes.
+- A photo snapped onto a line is sent through the same review and can reprice that line. A serial may identify the product. It is not placed in the price search.
+- Another clip can be added to the same inventory. Clips are reviewed in the order they were filmed, and the lines are combined. The same object still in frame does not become a second row.
+- The thing people pay for is the verification: property, equipment, and items, with the video kept beside the list. The carrier, buyer, or lender still decides what the record is worth. 100proof does not bind a policy and does not claim the list is 100% accurate.
+
+Use the incoming plan to shape price, who pays, the campaign, and the go-to-market line. The campaign should make a person want to film the property because the inventory is something they can show. Likability is a short path: film, pause, see the list, correct a line, send it.
 
 ## What we say, and what we do not say
 
@@ -18,7 +46,7 @@ State regulators and the NAIC already tell people to make that list. The Texas D
 
 100proof does not decide coverage, and it does not say what an insurer pays for the product.
 
-“The only verifiable personal inventory tool” is not a claim we can defend. Other products record video, recognize objects, or seal a file. The defensible difference is a short walkthrough tied to the account, plus a correctness bar we measure on each reviewed scan.
+“The only verifiable personal inventory tool” is not a claim we can defend. Other products record video, recognize objects, or seal a file. The defensible difference is a video the person films, reviewed into an inventory tied to the account, plus a correctness bar we measure on each reviewed scan.
 
 ## Accuracy goals
 

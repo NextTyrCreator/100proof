@@ -6,9 +6,9 @@ import { siteUrl } from "../lib/site";
 import { createServerSupabase } from "../lib/supabase/server";
 import "./globals.css";
 
-const title = "Verifiable personal property inventory in 100 seconds";
+const title = "Verified proof of personal property";
 const description =
-  "Most people are underinsured. Create a verifiable personal property inventory in 100 seconds for homeowners, renters, and commercial property. The walkthrough stays with the account.";
+  "Most people are underinsured. Take a video. 100proof turns it into an automated inventory you can prove, for homeowners, renters, and commercial property. The video stays with the account.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl()),

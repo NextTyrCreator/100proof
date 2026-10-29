@@ -1,6 +1,6 @@
 # 100proof
 
-> Most people are underinsured. 100proof is a 100-second video walkthrough that becomes a verifiable personal inventory tied to the account. It is for personal property and commercial property, at the start of a policy and again at renewal.
+> Most people are underinsured. Take a video. 100proof turns it into an automated inventory with verified proof, tied to the account. It is for personal property and commercial property, at the start of a policy and again at renewal. The name is the brand. It is not a claim that the list is 100% accurate.
 
 100proof is not a program of the National Association of Insurance Commissioners, the Texas Department of Insurance, or any government. Those offices already tell people to inventory what they own. This product is how a person does that job before a loss.
 
@@ -8,7 +8,7 @@ The public site is https://100proof.tech.
 
 ## What a person does
 
-- Record a narrated walkthrough of up to 100 seconds.
+- Record a narrated walkthrough, up to 5 minutes, in 30-second clips. Pause and continue until you are done.
 - Keep the video with the account, instead of a spreadsheet of pictures that can be separated from the person who made it.
 - Confirm or correct each recognized item. Coverage decisions stay with the insurer. 100proof does not decide what a policy pays.
 

@@ -5,11 +5,37 @@ import { useAudience } from "./Audience";
 import { InsurerInquiry } from "./InsurerInquiry";
 import { MarketPitch } from "./MarketPitch";
 import { InventoryDocument } from "./InventoryDocument";
-import { createBrowserSupabase } from "../lib/supabase/browser";
 
 /** Matches Auth → Sign In / Providers → Email → Email OTP Expiration. */
 const CODE_TTL_MS = 10 * 60 * 1000;
+const SEND_GAP_MS = 60_000;
+const PENDING_KEY = "100proof.email-code";
 const LEAD = "Most people are underinsured.";
+
+type PendingCode = { email: string; expiresAt: number; sentAt: number };
+
+function readPending(): PendingCode | null {
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(PENDING_KEY) ?? "") as Partial<PendingCode>;
+    if (typeof parsed.email !== "string" || typeof parsed.expiresAt !== "number" || typeof parsed.sentAt !== "number") return null;
+    if (parsed.expiresAt <= Date.now()) {
+      sessionStorage.removeItem(PENDING_KEY);
+      return null;
+    }
+    return { email: parsed.email, expiresAt: parsed.expiresAt, sentAt: parsed.sentAt };
+  } catch {
+    return null;
+  }
+}
+
+function writePending(pending: PendingCode) {
+  sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
+}
+
+function clearPending() {
+  sessionStorage.removeItem(PENDING_KEY);
+}
 
 export function LoginGate({ email }: { email: string | null }) {
   const { audience, setAudience } = useAudience();
@@ -42,10 +68,10 @@ export function LoginGate({ email }: { email: string | null }) {
       </h1>
       <div className="login-rest">
         <p className="login-promise">
-          <span>Create an entire verifiable personal inventory in</span>
-          <span className="login-promise-close">
-            <span className="login-promise-time">100 seconds</span> and rest assured.
-          </span>
+            <span>Take a video. Get an automated inventory with</span>
+            <span className="login-promise-close">
+              <span className="login-promise-time">verified proof</span>, and insure it properly.
+            </span>
         </p>
         {view === null ? <MarketPitch /> : null}
         {view === null ? <AudienceChoice onChoose={setAudience} /> : null}
@@ -77,6 +103,7 @@ function EmailLogin() {
   const [notice, setNotice] = useState<"sent" | "resent">("sent");
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [resendAt, setResendAt] = useState<number | null>(null);
+  const [holdNote, setHoldNote] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [pending, setPending] = useState<"send" | "check" | null>(null);
   const [error, setError] = useState("");
@@ -89,6 +116,15 @@ function EmailLogin() {
   const expired = sent && expiresAt !== null && remaining === 0;
   const resendWait = resendAt === null ? 0 : Math.max(0, resendAt - now);
   const life = expiresAt === null ? 0 : Math.min(1, remaining / CODE_TTL_MS);
+
+  useEffect(() => {
+    const saved = readPending();
+    if (!saved) return;
+    setEmail(saved.email);
+    setSent(true);
+    setExpiresAt(saved.expiresAt);
+    if (saved.sentAt + SEND_GAP_MS > Date.now()) setResendAt(saved.sentAt + SEND_GAP_MS);
+  }, []);
 
   useEffect(() => {
     if (expiresAt === null) return;
@@ -124,35 +160,62 @@ function EmailLogin() {
     const renewing = sent;
     setError("");
     setPending("send");
-    const supabase = createBrowserSupabase();
-    const { error: sendError } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-        shouldCreateUser: true,
-      },
-    });
-    setPending(null);
-    if (sendError) {
-      const plain = plainAuthError(sendError.message);
-      if (plain.retryAfterMs && renewing) {
-        setResendAt(Date.now() + plain.retryAfterMs);
-        setError("The code already sent still works.");
-        return;
-      }
-      setError(plain.text);
+    let response: Response;
+    try {
+      response = await fetch("/api/auth/code", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+    } catch {
+      setPending(null);
+      setError("The code could not be sent. Try again.");
       return;
     }
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      replacesPrevious?: boolean;
+      retryAfterMs?: number;
+      reason?: "wait" | "locked";
+      error?: string;
+    } | null;
+    setPending(null);
+    if (!response.ok || !payload?.ok) {
+      if (payload?.retryAfterMs && payload.reason === "wait") {
+        const retryAfterMs = payload.retryAfterMs;
+        const age = Math.max(0, SEND_GAP_MS - retryAfterMs);
+        const nextExpires = Date.now() + CODE_TTL_MS - age;
+        const keptExpires = expiresAt ?? nextExpires;
+        setSent(true);
+        setExpiresAt((current) => current ?? nextExpires);
+        setHoldNote(true);
+        setResendAt(Date.now() + retryAfterMs);
+        setStatus("This code works until a new one is sent.");
+        writePending({ email: email.trim(), expiresAt: keptExpires, sentAt: Date.now() - age });
+        return;
+      }
+      if (payload?.reason === "locked") {
+        setError("Too many codes were sent. Wait, then try again.");
+        if (payload.retryAfterMs) setResendAt(Date.now() + payload.retryAfterMs);
+        return;
+      }
+      setError(payload?.error || "The code could not be sent. Try again.");
+      return;
+    }
+    setHoldNote(false);
+    const sentAt = Date.now();
+    const nextExpires = sentAt + CODE_TTL_MS;
     focusCode.current = true;
-    setNotice(renewing ? "resent" : "sent");
+    setNotice(payload.replacesPrevious || renewing ? "resent" : "sent");
     setCode("");
     setSent(true);
-    setResendAt(null);
-    setExpiresAt(Date.now() + CODE_TTL_MS);
-    setNow(Date.now());
+    setResendAt(sentAt + SEND_GAP_MS);
+    setExpiresAt(nextExpires);
+    setNow(sentAt);
+    writePending({ email: email.trim(), expiresAt: nextExpires, sentAt });
     setStatus(
-      renewing
-        ? "New code sent. It expires in 10 minutes."
+      payload.replacesPrevious || renewing
+        ? "New code sent. The previous code no longer works. It expires in 10 minutes."
         : "Code sent. It expires in 10 minutes.",
     );
   }
@@ -167,22 +230,40 @@ function EmailLogin() {
     }
     setError("");
     setPending("check");
-    const supabase = createBrowserSupabase();
-    const { error: verifyError } = await supabase.auth.verifyOtp({
-      email: email.trim(),
-      token: code.trim(),
-      type: "email",
-    });
-    setPending(null);
-    if (verifyError) {
-      setError(plainAuthError(verifyError.message).text);
+    let response: Response;
+    try {
+      response = await fetch("/api/auth/code/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), code: code.trim() }),
+      });
+    } catch {
+      setPending(null);
+      setError("That code could not be checked. Try again.");
       return;
     }
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      reason?: "locked";
+      retryAfterMs?: number;
+    } | null;
+    setPending(null);
+    if (!response.ok || !payload?.ok) {
+      if (payload?.reason === "locked") {
+        setError("Too many tries. Wait, then send a new code.");
+        return;
+      }
+      setError(payload?.error || "That code didn't match. Check the email and try again.");
+      return;
+    }
+    clearPending();
     window.location.assign("/");
   }
 
   function useDifferentEmail() {
     if (pending) return;
+    clearPending();
     setSent(false);
     setCode("");
     setExpiresAt(null);
@@ -194,7 +275,7 @@ function EmailLogin() {
   const sendLabel =
     pending === "send" ? "Sending" : resendWait > 0 ? `New code in ${formatRemaining(resendWait)}` : "Send a new code";
   const reassurance = resendWait > 0;
-  const visibleError = error === "The code already sent still works." ? "" : error;
+  const visibleError = error;
 
   return (
     <>
@@ -253,9 +334,9 @@ function EmailLogin() {
               </button>
             </>
           )}
-          {reassurance ? (
+          {holdNote && reassurance && !expired ? (
             <p className="code-note" role="status">
-              The code already sent still works.
+              This code works until a new one is sent. A new code replaces it in {formatRemaining(resendWait)}.
             </p>
           ) : null}
           {visibleError ? (
@@ -301,14 +382,3 @@ function formatRemaining(ms: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-function plainAuthError(message: string) {
-  const wait = /after (\d+) seconds?/i.exec(message);
-  if (wait) return { text: "The code already sent still works.", retryAfterMs: Number(wait[1]) * 1000 };
-  const lower = message.toLowerCase();
-  if (lower.includes("rate")) return { text: "Wait a moment, then send a new code.", retryAfterMs: null };
-  if (lower.includes("expired")) return { text: "This code expired. Send a new one.", retryAfterMs: null };
-  if (lower.includes("invalid") || lower.includes("otp")) {
-    return { text: "That code didn't match. Check the email and try again.", retryAfterMs: null };
-  }
-  return { text: message, retryAfterMs: null };
-}

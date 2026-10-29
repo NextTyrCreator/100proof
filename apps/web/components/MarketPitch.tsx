@@ -27,9 +27,9 @@ export function MarketPitch() {
       <p className="market-note">
         The National Association of Insurance Commissioners tells people to inventory every room, with pictures or
         video, and to update it each year. The Texas Department of Insurance says a missing list can delay a contents
-        claim. 100proof is not their program. It is a 100-second walkthrough, tied to the account, for personal
-        property and commercial property. A spreadsheet of pictures is a list. This is the record and the person,
-        together.
+        claim. 100proof is not their program. You take a video. It becomes an automated inventory, tied to
+        the account, for personal property and commercial property. A spreadsheet of pictures is a list. This is the
+        record and the person, together.
       </p>
     </section>
   );

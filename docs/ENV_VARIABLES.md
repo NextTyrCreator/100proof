@@ -4,7 +4,7 @@ Every variable the system reads, where it is used, whether it is a secret, and w
 
 | Variable | Used by | Secret | Purpose | Rotation |
 | --- | --- | --- | --- | --- |
-| `META_MODEL_API_KEY` | worker | yes | Meta Model API (SAM 3.1, Muse Spark, Muse Wonder, Muse Image, Voice). Standard mode key. Receipt parsing uses this key. | Regenerate at dev.meta.ai; update Fly + GitHub secrets |
+| `META_MODEL_API_KEY` | worker, web server | yes | Meta Model API (SAM 3.1, Muse Spark, Muse Wonder, Muse Image, Voice). Standard mode key. The scan review route reads it on the server. It is never sent to the browser. | Regenerate at dev.meta.ai; update Fly + GitHub secrets |
 | `META_MODEL_API_BASE_URL` | worker | no | `https://api.meta.ai/v1` | n/a |
 | `NEXT_PUBLIC_SUPABASE_URL` | web, worker | no | Supabase project URL | n/a |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | web | no (public, RLS-bound) | Browser client; RLS enforces access | Supabase → API settings |

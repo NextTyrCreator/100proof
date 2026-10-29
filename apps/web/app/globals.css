@@ -75,7 +75,16 @@ button {
   background: rgb(255 255 255 / 92%);
   backdrop-filter: blur(16px);
   border-bottom: 1px solid color-mix(in srgb, var(--proof-navy) 8%, transparent);
-  z-index: 2;
+  z-index: 4;
+}
+
+.header-desktop {
+  display: contents;
+}
+
+.menu-toggle,
+.menu-sheet {
+  display: none;
 }
 
 .logo {
@@ -92,15 +101,6 @@ button {
 
 .audience-tabs {
   margin-left: auto;
-}
-
-.demo-chip {
-  margin-left: auto;
-}
-
-.header:has(.audience-tabs) .demo-chip,
-.header:has(.account) .demo-chip {
-  margin-left: 0;
 }
 
 .account {
@@ -178,16 +178,6 @@ button {
 
 .choice .button {
   width: 100%;
-}
-
-.demo-chip {
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--proof-text-secondary);
-  border: 1px solid color-mix(in srgb, var(--proof-navy) 12%, transparent);
-  border-radius: 999px;
-  padding: 6px 10px;
 }
 
 .main {
@@ -338,22 +328,49 @@ button {
   letter-spacing: -0.03em;
 }
 
+.address-line {
+  display: grid;
+  gap: 8px;
+}
+
 .confirm-address {
   margin: 0;
   color: var(--proof-text-secondary);
   line-height: 1.45;
 }
 
-.place-check {
-  margin: 0;
-  color: var(--proof-teal);
-  font-weight: 650;
+.confirm-address.is-checked {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.place-mark {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--proof-teal);
+  color: white;
+}
+
+.place-mark svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .place-distance {
   margin: 0;
   color: var(--proof-navy);
-  font-weight: 650;
+  line-height: 1.45;
 }
 
 .record-hash {
@@ -701,6 +718,20 @@ h1 {
   animation: rise var(--proof-duration-fast) var(--proof-ease) both;
 }
 
+.low-value,
+.item-meta {
+  margin: 0;
+  color: var(--proof-text-secondary);
+  font-size: 0.92rem;
+}
+
+.item-photo {
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
 .item-list li {
   display: grid;
   gap: 2px;
@@ -778,6 +809,40 @@ h1 {
   flex: 1;
 }
 
+.back-arrow {
+  justify-self: start;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: -6px 0 -4px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--proof-navy);
+  cursor: pointer;
+}
+
+.back-arrow svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.back-arrow:hover {
+  background: var(--proof-surface-soft);
+}
+
+.back-arrow:focus-visible {
+  outline: 2px solid var(--proof-navy);
+  outline-offset: 3px;
+}
+
 .recorder {
   margin-top: 28px;
   display: grid;
@@ -831,6 +896,33 @@ h1 {
   border-radius: 999px;
   background: color-mix(in srgb, var(--proof-navy) 8%, transparent);
   overflow: hidden;
+}
+
+.clip-rail {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.clip-mark {
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--proof-navy) 8%, transparent);
+  overflow: hidden;
+}
+
+.clip-mark > span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--proof-navy);
+  transform-origin: left center;
+}
+
+.record-controls {
+  display: grid;
+  grid-template-columns: 1fr 112px;
+  gap: 10px;
 }
 
 .record-progress span {
@@ -1232,6 +1324,11 @@ h1 {
   font-size: 0.85rem;
 }
 
+.field .required {
+  color: var(--proof-navy);
+  margin-left: 0.2em;
+}
+
 .field input,
 .field select,
 .field textarea {
@@ -1385,6 +1482,17 @@ h1 {
   to { opacity: 1; }
 }
 
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .footer p {
   margin: 0;
   color: var(--proof-text-secondary);
@@ -1393,36 +1501,109 @@ h1 {
 
 @media (max-width: 720px) {
   .header {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     padding: max(10px, env(safe-area-inset-top)) 16px 10px;
-    gap: 8px 10px;
+    gap: 12px;
   }
 
   .logo {
     height: 56px;
   }
 
-  .audience-tabs {
-    order: 3;
-    width: 100%;
-    margin-left: 0;
+  .header-desktop {
+    display: none;
   }
 
-  .header:has(.audience-tabs) .demo-chip,
-  .header:has(.account) .demo-chip {
+  .menu-toggle {
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
     margin-left: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--proof-navy);
+    cursor: pointer;
   }
 
-  .account {
-    order: 3;
+  .menu-toggle:hover,
+  .menu-toggle[aria-expanded="true"] {
+    background: var(--proof-surface-soft);
+  }
+
+  .menu-toggle:focus-visible {
+    outline: 2px solid var(--proof-navy);
+    outline-offset: 3px;
+  }
+
+  .menu-icon {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+
+  .menu-sheet {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 16px max(20px, env(safe-area-inset-bottom));
+    overflow: auto;
+    background: var(--proof-surface);
+    border-top: 1px solid color-mix(in srgb, var(--proof-navy) 8%, transparent);
+    box-shadow: 0 18px 40px color-mix(in srgb, var(--proof-navy) 10%, transparent);
+    animation: menu-in var(--proof-duration) var(--proof-ease) both;
+  }
+
+  .menu-email {
+    margin: 0 0 4px;
+    padding: 14px 16px 16px;
+    border-bottom: 1px solid color-mix(in srgb, var(--proof-navy) 8%, transparent);
+    color: var(--proof-navy);
+    font-size: 0.95rem;
+    font-weight: 650;
+    overflow-wrap: anywhere;
+  }
+
+  .menu-sheet .nav,
+  .menu-sheet .audience-tabs {
+    flex-direction: column;
+    align-items: stretch;
     width: 100%;
-    margin-left: 0;
-    justify-content: space-between;
+    margin: 0;
+    gap: 8px;
   }
 
-  .account-email {
-    max-width: none;
+  .menu-sheet .nav a,
+  .menu-sheet .audience-tabs button {
+    display: flex;
+    align-items: center;
+    min-height: 52px;
+    padding: 0 16px;
+    border-radius: 14px;
+    background: var(--proof-surface-soft);
+    color: var(--proof-navy);
+    font-weight: 650;
+    text-align: left;
+  }
+
+  .menu-spacer {
     flex: 1;
+  }
+
+  .menu-logout {
+    width: 100%;
+    margin-top: 8px;
+    min-height: 52px;
   }
 
   .main {
@@ -1483,6 +1664,7 @@ h1 {
   .loader-screen,
   .loader-inline,
   .page-enter > :not(.loader-screen),
+  .menu-sheet,
   .login-letters span span,
   .login-line-next,
   .login-rest,

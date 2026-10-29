@@ -1,6 +1,6 @@
 # apps/web
 
-Next.js app for the demo. Home, a live scan of up to 100 seconds, and the inventory document use the brand tokens in `packages/ui`.
+Next.js app for the demo. Home, a live scan of up to 5 minutes in 30-second clips, and the inventory document use the brand tokens in `packages/ui`.
 
 ```bash
 corepack pnpm --filter @100proof/web dev

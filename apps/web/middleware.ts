@@ -22,7 +22,7 @@ export async function middleware(request: NextRequest) {
 
   const { data } = await supabase.auth.getUser();
   const path = request.nextUrl.pathname;
-  const open = path === "/" || path.startsWith("/auth/");
+  const open = path === "/" || path.startsWith("/auth/") || path.startsWith("/api/auth/code");
   if (!data.user && !open) {
     const redirect = request.nextUrl.clone();
     redirect.pathname = "/";
@@ -33,5 +33,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|txt|xml)$).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/scan/review|.*\\.(?:svg|png|jpg|jpeg|gif|webp|txt|xml)$).*)"],
 };

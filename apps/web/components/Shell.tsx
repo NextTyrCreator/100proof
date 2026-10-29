@@ -1,11 +1,8 @@
 import { AudienceProvider, type Audience } from "./Audience";
-import { AudienceTabs } from "./AudienceTabs";
 import { Footer } from "./Footer";
+import { HeaderBar } from "./HeaderBar";
 import { InventoryProvider } from "./InventoryProvider";
-import { Logo } from "./Logo";
-import { Nav } from "./Nav";
 import { PageFade } from "./PageFade";
-import { SignOut } from "./SignOut";
 
 export function Shell({
   children,
@@ -22,17 +19,7 @@ export function Shell({
     <InventoryProvider>
       <AudienceProvider initial={audience}>
         <div className="shell">
-          <header className="header">
-            <Logo />
-            {signedIn ? <Nav /> : <AudienceTabs />}
-            {signedIn ? (
-              <div className="account">
-                {email ? <p className="account-email">{email}</p> : null}
-                <SignOut />
-              </div>
-            ) : null}
-            <span className="demo-chip">Demo</span>
-          </header>
+          <HeaderBar signedIn={signedIn} email={email} />
           <main className="main">
             <PageFade>{children}</PageFade>
           </main>

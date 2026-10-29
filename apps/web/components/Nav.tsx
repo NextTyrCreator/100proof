@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 
 const links = [{ href: "/", label: "My inventory" }];
 
-export function Nav() {
+export function Nav({ onNavigate }: { onNavigate?: () => void } = {}) {
   const path = usePathname();
 
   return (
@@ -14,6 +14,7 @@ export function Nav() {
         <Link
           key={link.href}
           href={link.href}
+          onClick={onNavigate}
           aria-current={path === "/" || path === "/inventory" ? "page" : undefined}
         >
           {link.label}

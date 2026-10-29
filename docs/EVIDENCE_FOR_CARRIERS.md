@@ -28,7 +28,7 @@ NAIC consumer material lists unsatisfactory settlement amounts among the common 
 
 ## What 100proof keeps, and what it refuses to say
 
-The walkthrough is recorded on the site, at that time, for up to 100 seconds, and the source video can be downloaded to the device. Narration stays in the audio. A later recognition pass lists items it prices over $10, marks items over $500 as high value, and holds anything it scores under 90% for a name, a description, a price, and a source. The source can be a receipt, a quote, an invoice, or an email. The scan estimate and the source-backed price stay separate so a comparable is never presented as a receipt.
+The walkthrough is recorded on the site, at that time, for up to 5 minutes in 30-second clips, and the source video can be downloaded to the device. Narration stays in the audio. A later recognition pass lists items it prices over $10, marks items over $500 as high value, and holds anything it scores under 90% for a name, a description, a price, and a source. The source can be a receipt, a quote, an invoice, or an email. The scan estimate and the source-backed price stay separate so a comparable is never presented as a receipt.
 
 A small memory table, `recognition_memory`, stores only an object key, a shard, and counts of confirmed or corrected outcomes. It does not store names, emails, serials, photos, or free-text descriptions. Corrections stay inside the organization until a later job is allowed to promote a de-identified count.
 
