@@ -2,9 +2,11 @@ import { z } from "zod";
 import {
   GROUP_UNDER_USD,
   HIGH_VALUE_OVER_USD,
+  type ItemAsk,
   type RoomItem,
   type RoomShard,
   type SizeBand,
+  type ValueOption,
   type Wearer,
 } from "./inventory";
 
@@ -56,6 +58,29 @@ const rawItemSchema = z.object({
   usefulLifeYears: z.number().finite().positive().max(80).nullable().optional(),
   narration: z.string().trim().max(300).nullable().optional(),
   seenReplacementUsd: z.number().finite().nonnegative().max(1_000_000).nullable().optional(),
+  seenAtSec: z.number().finite().nonnegative().max(600).nullable().optional(),
+  saidAtSec: z.number().finite().nonnegative().max(600).nullable().optional(),
+  countSettled: z.boolean().nullable().optional(),
+  identitySettled: z.boolean().nullable().optional(),
+  options: z
+    .array(
+      z.object({
+        label: z.string().trim().min(1).max(120),
+        lowUsd: z.number().finite().nonnegative().max(1_000_000),
+        highUsd: z.number().finite().nonnegative().max(1_000_000),
+      }),
+    )
+    .max(6)
+    .nullable()
+    .optional(),
+  ask: z
+    .object({
+      kind: z.enum(["label", "wider", "receipt", "question"]),
+      prompt: z.string().trim().max(400).nullable().optional(),
+    })
+    .nullable()
+    .optional()
+    .catch(null),
 });
 
 const rawReviewSchema = z.object({
@@ -71,6 +96,35 @@ const rawReviewSchema = z.object({
 
 const wearerSchema = z.enum(["women", "men", "kids", "unknown"]).nullable();
 const sizeBandSchema = z.enum(["kids", "adults", "unknown"]).nullable();
+const evidenceKindSchema = z.enum(["label", "wider", "receipt", "question"]);
+const changeValueSchema = z.union([z.string().max(400), z.number().finite(), z.boolean(), z.null()]);
+
+const sightingSchema = z.object({
+  clipId: z.string().uuid().nullable(),
+  atSec: z.number().finite().nonnegative().max(600).nullable(),
+});
+
+const saidFactSchema = z.object({
+  text: z.string().trim().min(1).max(300),
+  clipId: z.string().uuid().nullable(),
+  atSec: z.number().finite().nonnegative().max(600).nullable(),
+  heard: z.enum(["transcript", "video", "typed"]),
+});
+
+export const valueOptionSchema = z.object({
+  label: z.string().trim().min(1).max(120),
+  lowUsd: z.number().finite().nonnegative().max(1_000_000),
+  highUsd: z.number().finite().nonnegative().max(1_000_000),
+});
+
+const itemChangeSchema = z.object({
+  id: z.string().uuid(),
+  at: z.string().min(1).max(40),
+  source: z.enum(["label photo", "receipt photo", "photo", "clip", "your answer", "your edit"]),
+  evidenceRef: z.string().max(300).nullable(),
+  before: z.record(z.string().max(40), changeValueSchema),
+  after: z.record(z.string().max(40), changeValueSchema),
+});
 
 export const reviewItemSchema = z.object({
   id: z.string().uuid(),
@@ -99,7 +153,17 @@ export const reviewItemSchema = z.object({
   userNote: z.string().max(500),
   userValueUsd: z.number().finite().nonnegative().max(1_000_000).nullable(),
   photoUrl: z.string().max(2_000).nullable(),
+  photoPath: z.string().max(300).nullable(),
   highValue: z.boolean(),
+  sightings: z.array(sightingSchema).max(60),
+  said: z.array(saidFactSchema).max(20),
+  countSettled: z.boolean(),
+  identitySettled: z.boolean(),
+  options: z.array(valueOptionSchema).max(3),
+  ask: z.object({ kind: evidenceKindSchema, prompt: z.string().max(160) }).nullable(),
+  skipped: z.array(evidenceKindSchema).max(4),
+  pricedAt: z.string().max(40).nullable(),
+  changes: z.array(itemChangeSchema).max(40),
 });
 
 export const reviewResultSchema = z.object({
@@ -151,7 +215,15 @@ type Draft = {
   narration: string | null;
   seenReplacementUsd: number | null;
   roomTitle: string;
+  seenAt: number[];
+  saidAtSec: number | null;
+  countSettled: boolean;
+  identitySettled: boolean;
+  options: ValueOption[];
+  ask: ItemAsk | null;
 };
+
+type Heard = "transcript" | "video";
 
 export type PricedLine = {
   key: string;
@@ -169,7 +241,7 @@ export function normLabel(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-export function lineKey(parts: { name: string; description: string; color: string | null; size: string | null; serial?: string | null }) {
+function lineKey(parts: { name: string; description: string; color: string | null; size: string | null; serial?: string | null }) {
   return [parts.name, parts.description, parts.color ?? "", parts.size ?? "", parts.serial ?? ""].map(normLabel).join("|");
 }
 
@@ -285,7 +357,15 @@ function rowName(draft: Draft, grouped: boolean) {
   return draft.name;
 }
 
-function blankItem(draft: Draft, priceUsd: number | null, valueBasis: string | null, sourceUrl: string | null, grouped: boolean): RoomItem {
+function blankItem(
+  draft: Draft,
+  priceUsd: number | null,
+  valueBasis: string | null,
+  sourceUrl: string | null,
+  grouped: boolean,
+  heard: Heard,
+  pricedAt: string | null,
+): RoomItem {
   const unit = priceUsd;
   const worn = unit == null ? { cash: null, note: null } : depreciate(unit, draft.ageYears, draft.usefulLifeYears, draft.condition);
   return {
@@ -318,12 +398,40 @@ function blankItem(draft: Draft, priceUsd: number | null, valueBasis: string | n
     userNote: "",
     userValueUsd: null,
     photoUrl: null,
+    photoPath: null,
     highValue: unit != null && unit > HIGH_VALUE_OVER_USD,
+    sightings: draft.seenAt.slice(0, 60).map((atSec) => ({ clipId: null, atSec })),
+    said: draft.narration
+      ? [{ text: draft.narration.slice(0, 300), clipId: null, atSec: draft.saidAtSec, heard }]
+      : [],
+    countSettled: draft.countSettled,
+    identitySettled: draft.identitySettled,
+    options: draft.identitySettled ? [] : draft.options.slice(0, 3),
+    ask: draft.ask,
+    skipped: [],
+    pricedAt,
+    changes: [],
   };
 }
 
+function settledAsk(
+  ask: { kind: ItemAsk["kind"]; prompt?: string | null } | null | undefined,
+  countSettled: boolean,
+  identitySettled: boolean,
+): ItemAsk | null {
+  if (!ask) {
+    if (!identitySettled) return { kind: "label", prompt: "" };
+    if (!countSettled) return { kind: "wider", prompt: "" };
+    return null;
+  }
+  const prompt = ask.kind === "question" ? (ask.prompt ?? "").trim().slice(0, 160) : "";
+  if (ask.kind === "question" && !prompt) return null;
+  return { kind: ask.kind, prompt };
+}
+
 /** Turn a model list into itemized rows and category groups under $100. */
-export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptLine[]): ReviewResult {
+export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptLine[], heard: Heard = "video"): ReviewResult {
+  const pricedAt = new Date().toISOString();
   const parsed = rawReviewSchema.safeParse(raw);
   if (!parsed.success) throw new Error("The review did not come back as a list.");
 
@@ -352,7 +460,20 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
         narration: clean(item.narration),
         seenReplacementUsd: item.seenReplacementUsd ?? null,
         roomTitle: room.title.trim(),
+        seenAt: item.seenAtSec == null ? [] : [item.seenAtSec],
+        saidAtSec: item.saidAtSec ?? null,
+        countSettled: item.countSettled ?? true,
+        identitySettled: item.identitySettled ?? true,
+        options: (item.options ?? [])
+          .map((option) => ({
+            label: option.label,
+            lowUsd: Math.min(option.lowUsd, option.highUsd),
+            highUsd: Math.max(option.lowUsd, option.highUsd),
+          }))
+          .slice(0, 3),
+        ask: null,
       };
+      draft.ask = settledAsk(item.ask, draft.countSettled, draft.identitySettled);
       if (draft.serial && draft.markings?.includes(draft.serial)) {
         draft.markings = knownMark(draft.markings.replaceAll(draft.serial, " "));
       }
@@ -373,6 +494,15 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
       existing.count = nextCount;
       if (draft.seenReplacementUsd != null) {
         existing.seenReplacementUsd = Math.max(existing.seenReplacementUsd ?? 0, draft.seenReplacementUsd);
+      }
+      existing.seenAt.push(...draft.seenAt);
+      existing.countSettled = existing.countSettled && draft.countSettled;
+      existing.identitySettled = existing.identitySettled && draft.identitySettled;
+      if (existing.options.length === 0) existing.options = draft.options;
+      existing.ask = existing.ask ?? draft.ask;
+      if (!existing.narration && draft.narration) {
+        existing.narration = draft.narration;
+        existing.saidAtSec = draft.saidAtSec;
       }
     }
   }
@@ -406,7 +536,7 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
     let groupedNow = grouped;
     if (price != null && price >= GROUP_UNDER_USD) groupedNow = false;
     else if (price != null && price < GROUP_UNDER_USD && !draft.serial && !ALWAYS_ROW.has(draft.category)) groupedNow = true;
-    const item = blankItem(draft, price, basis, sourceUrl, groupedNow);
+    const item = blankItem(draft, price, basis, sourceUrl, groupedNow, heard, found?.replacementUsd != null ? pricedAt : null);
     const bucket = byRoom.get(draft.roomTitle) ?? [];
     bucket.push(item);
     byRoom.set(draft.roomTitle, bucket);

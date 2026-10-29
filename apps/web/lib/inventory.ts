@@ -1,14 +1,16 @@
 import { addressRegionLabel } from "./address-search";
 
-export const MAX_SCAN_MS = 5 * 60 * 1000;
+const MAX_SCAN_MS = 5 * 60 * 1000;
 /** Ordinary goods at or above this replacement price are their own row. Under it, they are grouped. */
 export const GROUP_UNDER_USD = 100;
 export const HIGH_VALUE_OVER_USD = 500;
 /** A model score at or above this is treated as recognized. Below it, the person names the item. */
-export const CERTAIN_CONFIDENCE = 0.9;
+const CERTAIN_CONFIDENCE = 0.9;
 
 export type Wearer = "women" | "men" | "kids" | "unknown";
 export type SizeBand = "kids" | "adults" | "unknown";
+
+export type SpokenLine = { startMs: number; endMs: number; text: string };
 
 export type ScanClip = {
   id: string;
@@ -19,7 +21,45 @@ export type ScanClip = {
   mediaType: string;
   sourceKept: true;
   contentHash: string;
+  /** Private storage paths. Null until the clip is saved to the account. */
+  storagePath: string | null;
+  posterPath: string | null;
+  /** What Muse Voice Transcribe heard in this clip, with times inside the clip. */
+  spoken: SpokenLine[];
 };
+
+/** Where an item was seen. */
+export type Sighting = { clipId: string | null; atSec: number | null };
+
+/** Something the person said or typed about an item. */
+export type SaidFact = {
+  text: string;
+  clipId: string | null;
+  atSec: number | null;
+  heard: "transcript" | "video" | "typed";
+};
+
+/** A possible model or kind when the identity is not settled. */
+export type ValueOption = { label: string; lowUsd: number; highUsd: number };
+
+export type EvidenceKind = "label" | "wider" | "receipt" | "question";
+
+export type ItemAsk = { kind: EvidenceKind; prompt: string };
+
+export type ChangeSource = "label photo" | "receipt photo" | "photo" | "clip" | "your answer" | "your edit";
+
+/** One change to a line and the evidence that caused it. */
+export type ItemChange = {
+  id: string;
+  at: string;
+  source: ChangeSource;
+  evidenceRef: string | null;
+  before: Record<string, string | number | boolean | null>;
+  after: Record<string, string | number | boolean | null>;
+};
+
+/** Saved instead of device coordinates. */
+export type LocationCheck = { checkedAt: string; within: boolean | null };
 
 /** One device reading, taken when the person presses Next. */
 export type ScanPlace = {
@@ -71,7 +111,19 @@ export type RoomItem = {
   /** What the person says it costs. Kept apart from the replacement estimate. */
   userValueUsd: number | null;
   photoUrl: string | null;
+  photoPath: string | null;
   highValue: boolean;
+  sightings: Sighting[];
+  said: SaidFact[];
+  /** False when part of the group was out of view or one piece may have been counted twice. */
+  countSettled: boolean;
+  /** False when the brand or model is not readable and the price would change. */
+  identitySettled: boolean;
+  options: ValueOption[];
+  ask: ItemAsk | null;
+  skipped: EvidenceKind[];
+  pricedAt: string | null;
+  changes: ItemChange[];
 };
 
 export type RoomShard = {
@@ -90,7 +142,16 @@ export type HomeInventory = {
   /** Id from the address-region list. Empty until they choose one. */
   addressRegion: string;
   addressPoint: AddressPoint | null;
+  /** The live reading for this visit. It is never saved. */
   place: ScanPlace | null;
+  locationCheck: LocationCheck | null;
+  /** Row version on the account. 0 until the first save. */
+  savedVersion: number;
+  /** False for a list entry whose full record has not been opened yet. */
+  loaded: boolean;
+  createdAt: string;
+  /** First still of the scan, for the list. */
+  coverUrl: string;
   /** SHA-256 of the sealed declaration and the walkthrough. Empty until Create inventory. */
   recordHash: string | null;
   sealedAt: string | null;
@@ -99,35 +160,42 @@ export type HomeInventory = {
   items: EnteredItem[];
 };
 
-export const ADDRESS_MATCH_MILES = 1;
+const ADDRESS_MATCH_MILES = 1;
 
 export function inventoryLabel(inventory: HomeInventory) {
   const title = inventory.title.trim();
   return title || "Untitled";
 }
 
-export function locationMiles(inventory: HomeInventory) {
-  if (!inventory.place || !inventory.addressPoint) return null;
-  return milesBetween(inventory.place, inventory.addressPoint);
+/** Live reading first, then the saved result. Null when it was not compared. */
+export function locationWithin(inventory: Pick<HomeInventory, "place" | "addressPoint" | "locationCheck">) {
+  if (inventory.place && inventory.addressPoint) {
+    return milesBetween(inventory.place, inventory.addressPoint) <= ADDRESS_MATCH_MILES;
+  }
+  return inventory.locationCheck?.within ?? null;
+}
+
+export function locationCheckedAt(inventory: Pick<HomeInventory, "place" | "locationCheck">) {
+  return inventory.place?.capturedAt ?? inventory.locationCheck?.checkedAt ?? null;
 }
 
 export function locationCheckLabel(inventory: HomeInventory) {
-  const miles = locationMiles(inventory);
-  if (miles == null) return "";
-  return miles <= ADDRESS_MATCH_MILES ? "within 1 mile" : "farther than 1 mile";
+  const within = locationWithin(inventory);
+  if (within == null) return "";
+  return within ? "within 1 mile" : "farther than 1 mile";
 }
 
 function locationProofLine(inventory: HomeInventory) {
-  const place = inventory.place;
-  if (!place) return "Location check: not recorded.";
-  const miles = locationMiles(inventory);
-  const when = formatWhen(place.capturedAt);
-  if (miles == null) return `Location check: recorded ${when}. The range was not compared.`;
-  if (miles <= ADDRESS_MATCH_MILES) return `Location check: within 1 mile of the insured property. ${when}`;
+  const checkedAt = locationCheckedAt(inventory);
+  if (!checkedAt) return "Location check: not recorded.";
+  const within = locationWithin(inventory);
+  const when = formatWhen(checkedAt);
+  if (within == null) return `Location check: recorded ${when}. The range was not compared.`;
+  if (within) return `Location check: within 1 mile of the insured property. ${when}`;
   return `Location check: farther than 1 mile. Full verification needs the device within 1 mile. ${when}`;
 }
 
-export function milesBetween(
+function milesBetween(
   from: { latitude: number; longitude: number },
   to: { latitude: number; longitude: number },
 ) {
@@ -223,7 +291,17 @@ export function userEnteredItem(name: string, count: number, note: string): Room
     userNote: note,
     userValueUsd: null,
     photoUrl: null,
+    photoPath: null,
     highValue: false,
+    sightings: [],
+    said: [],
+    countSettled: true,
+    identitySettled: true,
+    options: [],
+    ask: null,
+    skipped: [],
+    pricedAt: null,
+    changes: [],
   };
 }
 
@@ -237,6 +315,18 @@ export function cashValueTotal(inventory: HomeInventory) {
 export function videoExtension(mediaType: string) {
   if (mediaType.includes("mp4")) return "mp4";
   return "webm";
+}
+
+/** Where a line's facts came from, kept apart: camera, said, receipt, comparable, reviewer. */
+function evidenceSources(item: RoomItem) {
+  const sources: string[] = [];
+  if (item.sightings.length > 0) sources.push(`camera ×${item.sightings.length}`);
+  if (item.said.length > 0) sources.push("said");
+  if (item.photoPath || item.changes.some((entry) => entry.source === "label photo" || entry.source === "photo")) sources.push("photo");
+  if (item.userValueUsd != null) sources.push("receipt or price paid");
+  if (item.valueBasis) sources.push(item.valueBasis.startsWith("Exact:") ? "exact product" : "comparable");
+  if (item.enteredBy === "you" || item.changes.some((entry) => entry.source === "your edit")) sources.push("you");
+  return sources;
 }
 
 function csvCell(value: string | number) {
@@ -276,14 +366,18 @@ export function inventoryCsv(inventory: HomeInventory) {
     "depreciation_note",
     "brand",
     "markings",
+    "evidence_sources",
+    "count_settled",
+    "model_settled",
+    "changes",
   ];
-  const place = inventory.place;
+  const blankTail = ["", "", "", ""];
   const shared = [
     inventoryLabel(inventory),
     addressRegionLabel(inventory.addressRegion),
     inventory.homeAddress.trim(),
     locationCheckLabel(inventory),
-    place ? place.capturedAt : "",
+    locationCheckedAt(inventory) ?? "",
   ];
   const rows = [header.join(",")];
 
@@ -315,6 +409,7 @@ export function inventoryCsv(inventory: HomeInventory) {
         "",
         "",
         "",
+        ...blankTail,
       ]
         .map(csvCell)
         .join(","),
@@ -350,6 +445,10 @@ export function inventoryCsv(inventory: HomeInventory) {
           item.depreciationNote ?? "",
           item.brand ?? "",
           item.markings ?? "",
+          evidenceSources(item).join("; "),
+          item.countSettled ? "yes" : "no",
+          item.identitySettled ? "yes" : "no",
+          item.changes.length,
         ]
           .map(csvCell)
           .join(","),
@@ -385,6 +484,7 @@ export function inventoryCsv(inventory: HomeInventory) {
         "",
         "",
         "",
+        ...blankTail,
       ]
         .map(csvCell)
         .join(","),
@@ -427,7 +527,14 @@ export function proofText(inventory: HomeInventory) {
         const traits = [item.brand, item.markings, item.category, item.wearer, item.sizeBand, item.color, item.size, item.age].filter(Boolean).join(" · ");
         if (traits) lines.push(`  ${traits}`);
         if (item.detail) lines.push(`  ${item.detail}`);
-        if (item.narration) lines.push(`  You said: ${item.narration}`);
+        if (item.said.length > 0) {
+          for (const fact of item.said.slice(0, 3)) lines.push(`  ${fact.heard === "typed" ? "You answered" : "You said"}: ${fact.text}`);
+        } else if (item.narration) {
+          lines.push(`  You said: ${item.narration}`);
+        }
+        if (!item.countSettled || !item.identitySettled) {
+          lines.push(`  Still open: ${[!item.countSettled ? "count" : "", !item.identitySettled ? "model" : ""].filter(Boolean).join(" and ")}`);
+        }
         if (item.depreciationNote) lines.push(`  ${item.depreciationNote}`);
         if (item.valueBasis) lines.push(`  ${item.valueBasis}`);
         if (item.serial) lines.push(`  Serial: ${item.serial}`);

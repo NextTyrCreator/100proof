@@ -1,4 +1,4 @@
-import { AudienceProvider, type Audience } from "./Audience";
+import { AudienceProvider } from "./Audience";
 import { Footer } from "./Footer";
 import { HeaderBar } from "./HeaderBar";
 import { InventoryProvider } from "./InventoryProvider";
@@ -8,16 +8,14 @@ export function Shell({
   children,
   signedIn,
   email,
-  audience,
 }: {
   children: React.ReactNode;
   signedIn: boolean;
   email: string | null;
-  audience: Audience | null;
 }) {
   return (
     <InventoryProvider>
-      <AudienceProvider initial={audience}>
+      <AudienceProvider>
         <div className="shell">
           <HeaderBar signedIn={signedIn} email={email} />
           <main className="main">

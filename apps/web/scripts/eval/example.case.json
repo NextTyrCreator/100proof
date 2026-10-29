@@ -1,0 +1,20 @@
+{
+  "name": "example-living-room",
+  "zip": "77002",
+  "jurisdiction": "Texas, United States",
+  "clips": [
+    { "video": "living-room-1.mp4", "audio": "living-room-1.wav" },
+    { "video": "living-room-2.mp4", "audio": null }
+  ],
+  "truth": [
+    { "name": "television", "aliases": ["tv"], "count": 1, "brand": "Samsung", "model": "QN65Q80C", "replacementUsd": 1100 },
+    { "name": "dining chair", "aliases": ["chair"], "count": 4, "replacementUsd": 120 },
+    { "name": "sofa", "aliases": ["couch"], "count": 1, "replacementUsd": 1400 }
+  ],
+  "evidence": [
+    { "truth": "television", "kind": "label", "image": "tv-label.jpg" },
+    { "truth": "dining chair", "kind": "wider", "video": "chairs-wide.mp4" },
+    { "truth": "sofa", "kind": "answer", "answer": "Bought it in 2022 for about $1,200." }
+  ],
+  "maxRequests": 5
+}

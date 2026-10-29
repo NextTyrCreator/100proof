@@ -1,58 +1,45 @@
 # 100proof
 
-> Most people are underinsured. Take a video. 100proof turns it into an automated inventory with verified proof, tied to the account. It is for personal property and commercial property, at the start of a policy and again at renewal. The name is the brand. It is not a claim that the list is 100% accurate.
+> 100proof (entered in the Meta Global AI Developer Hackathon 2026 as 100 Proof) is a home inventory app for insurance. A person films each room on a phone, and Meta's Muse Spark 1.3 turns the video into a room-by-room inventory with counts, brands, models, replacement cost in the property's zip, and actual cash value. When the video cannot confirm a line, 100proof asks for the one thing that would: a label photo, a wider shot, a receipt, or an answer.
 
-100proof is not a program of the National Association of Insurance Commissioners, the Texas Department of Insurance, or any government. Those offices already tell people to inventory what they own. This product is how a person does that job before a loss.
+The public site is https://100proof.tech. The guide for homeowners, renters, insurers, and administrators, with sources, is https://100proof.tech/information.
 
-The public site is https://100proof.tech.
+## For homeowners and renters
 
-## What a person does
+- Five minutes on a phone: film each room, with no typing and nothing to install.
+- Each line gets brand, model, count, replacement cost new in the property's zip, and actual cash value after wear.
+- It says what it could not see and asks for what would confirm it, instead of guessing.
+- The video stays with the account, every line shows where it came from, and the record is sealed with a fingerprint when it is created.
+- Download a CSV or a JSON claim file, email it, or send it. Film again at renewal.
+- Private by default: clips and pictures in private storage; exact device location never saved; personal data not sold.
 
-- Record a narrated walkthrough, up to 5 minutes, in 30-second clips. Pause and continue until you are done.
-- Keep the video with the account, instead of a spreadsheet of pictures that can be separated from the person who made it.
-- Confirm or correct each recognized item. Coverage decisions stay with the insurer. 100proof does not decide what a policy pays.
+## For insurers, adjusters, claims administrators, agents, and property managers
+
+- Files arrive reviewable: each line keeps its sources apart (camera, what the policyholder said, receipt, comparable) with a change history.
+- Anything that could not be confirmed is flagged at the top of the file.
+- Valuation follows the adjuster method: replacement cost for like kind and quality at local prices, and actual cash value after physical depreciation. The exact product, or a labeled comparable.
+- Contents documented at bind and renewal, before a loss.
+- Output as CSV and a versioned JSON claim file. Request a connection from the For providers tab on the home page.
+
+## Models
+
+Muse Spark 1.3 reviews the video, prices each line, and reads labels, receipts, and answers. Muse Voice Transcribe 1.0 captures what the person says while filming. Every model answer is checked before it reaches the inventory.
 
 ## Accuracy
 
-A single recognition hold of 90% is not an accuracy claim. An item scored under 90% waits for a person to name it.
+100proof does not claim 100% accuracy. Every line shows whether its count and its model are confirmed, and lines that cannot be confirmed are flagged for review rather than guessed.
 
-The scan-level goal, once items are reviewed, is at least 95% kept without correction. The aim is 98%. No score is shown until a scan has reviewed items. These are minimum goals, not a measured result of the product today.
+## What 100proof is not
 
-## The gap, and how to say the numbers
+- Not an insurance company, an adjuster, or a public adjuster. It does not interpret a policy, negotiate with an insurer, or decide coverage or payment. The insurer decides.
+- Not a program of the National Association of Insurance Commissioners, the Texas Department of Insurance, or any government. Those offices tell people to make a home inventory; 100proof is one way to do it.
+- Not certified by Meta. It uses named Meta models.
 
-Nobody publishes “contents losses not recovered because the property was under-declared.” 100proof builds a bounded estimate and labels it.
+## Facts with sources, checked 2026-10-29
 
-- United States: $3–7 billion a year in contents coverage that policyholders paid for and did not collect, because it was not documented. This is 100proof’s conservative estimate. It is not a government statistic.
-- Worldwide: $10–25 billion a year, from applying that US ratio to global insured property losses. This is an extrapolation. The US and UK figures in the source notes are the ones with a paper trail. The global figure is wider and less certain.
-- The first number is what a documented inventory addresses directly. The second is the larger market of contents that were never insured.
-
-Checked 2026-10-27:
-
-- NAIC, A Consumer’s Guide to Home Insurance: make a household inventory, room by room, with pictures or video, and update it every year. https://content.naic.org/sites/default/files/publication-hoi-pp-consumer-homeowners.pdf
-- NAIC survey, February 2012: 59% of consumers had not made a list of their possessions. Later state pages still say more than half. A “53%” figure was not found in the sources checked on this date. https://www.prnewswire.com/news-releases/most-americans-havent-protected-their-possessions-from-severe-weather-threats-142446065.html
-- Texas Department of Insurance: a home inventory matters because a missing list can delay a contents claim, and a phone video of each room is one way to make it. https://www.tdi.texas.gov/tips/home-inventory.html
-- California Department of Insurance, 2025 Los Angeles wildfires: the commissioner asked insurers to advance at least 75% of contents limits without an inventory, up to 100%. Many agreed to at least 75%. The remainder still required a list. This is not a finding that insurers settled claims at 75–80% because people could not itemize. https://www.insurance.ca.gov/0400-news/0100-press-releases/2025/release014-2025.cfm
-- Pitch sources to confirm before a press quote: Swiss Re sigma on natural-catastrophe losses; Go.Compare / Insurance Edge on UK contents (about £276 billion of possessions uninsured, 2024); Insurance Council of Australia on households with no contents policy.
-
-## What not to claim
-
-- Do not call 100proof an NAIC initiative, a TDI initiative, or a government program.
-- Do not claim it is the only inventory tool. Other products record video, seal a file, or recognize objects. As of 2026-10-27, none of the products checked below publish a measured item-accuracy rate.
-- Do not claim a current accuracy of 95% or 98%.
-- Do not say the product decides coverage.
-
-## Other tools, checked 2026-10-27
-
-No published item-accuracy percentage was found for these. “No accuracy claim” means no public measured rate was found, not that the product is inaccurate.
-
-- NAIC myHOME Scr.APP.book: free photo, barcode, and serial inventory. The NAIC and TDI point people to it. Not a video recognition product.
-- State Farm contents inventory aids: Excel and PDF room lists, plus Claims Hub. Not an accuracy claim.
-- HomeZada: video and photo recognition for a home inventory. The homeowner confirms the items. No accuracy percentage on the launch page.
-- Bevel (bevelmade.com): AI inventory from photos and video, built after the 2025 Los Angeles fires. NerdWallet reported identity and price errors in a trial. No accuracy percentage.
-- WHIG (whig.app): narrated iPhone walkthrough and a sealed evidence package. WHIG says the integrity certificate does not cover the accuracy of values. No accuracy percentage.
-- Sortly, BluePlum, Nest Egg, Itemtopia: catalogs a person fills in, with photos and exports. No accuracy percentage found.
-- Encircle: public positioning is field documentation for restoration and claims work, not a consumer accuracy claim.
-
-## Keywords this site is written for
-
-personal property, personal property insurance, home inventory, renters insurance, homeowners insurance, commercial property, insuring property, contents coverage, verifiable inventory
+- NAIC consumer guide: inventory every room with photos or video, store it away from the home, and update it every year. https://content.naic.org/sites/default/files/publication-hoi-pp-consumer-homeowners.pdf
+- Triple-I / Munich Re 2023 survey: 47% of homeowners said they had prepared an inventory of their possessions. https://www.iii.org/fact-statistic/facts-statistics-homeowners-and-renters-insurance
+- Texas Department of Insurance: a missing inventory can delay a contents claim; a phone video of each room is a valid start. https://www.tdi.texas.gov/tips/home-inventory.html
+- J.D. Power 2026 U.S. Property Claims Satisfaction Study: 40.7 days on average from first notice of loss to final payment. https://www.jdpower.com/business/press-releases/2026-us-property-claims-satisfaction-study/
+- California Department of Insurance, 2025 Los Angeles wildfires: insurers were asked to advance at least 75% of contents limits without an inventory. The remainder still needed a list. https://www.insurance.ca.gov/0400-news/0100-press-releases/2025/release014-2025.cfm
+- US contents coverage paid for and not collected because it was not documented: $3–7 billion a year. This is 100proof's own conservative estimate, not a government statistic.

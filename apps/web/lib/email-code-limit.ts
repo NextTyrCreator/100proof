@@ -16,7 +16,7 @@ type EmailState = {
 const emails = new Map<string, EmailState>();
 const ips = new Map<string, number[]>();
 
-export type CodeWait = {
+type CodeWait = {
   ok: false;
   retryAfterMs: number;
   reason: "wait" | "locked";

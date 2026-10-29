@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ADDRESS_REGIONS, resolveAddress, searchAddresses, type AddressHit } from "../lib/address-search";
 import { scanPlaceSchema, useInventory } from "./InventoryProvider";
@@ -28,7 +28,18 @@ export function Walkthrough() {
   const [error, setError] = useState("");
   const listId = useId();
   const router = useRouter();
-  const adding = useSearchParams().get("add") === "1";
+  const params = useSearchParams();
+  const adding = params.get("add") === "1";
+  const focusParam = params.get("focus") ?? "";
+  const focusIds = useMemo(
+    () =>
+      focusParam
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => /^[\w-]{1,80}$/.test(id))
+        .slice(0, 10),
+    [focusParam],
+  );
 
   useEffect(() => {
     if (!selected) startInventoryRef.current();
@@ -244,6 +255,7 @@ export function Walkthrough() {
         </div>
       ) : inventory.place ? (
         <Recorder
+          focusIds={adding ? focusIds : undefined}
           onBack={() => {
             if (adding) {
               router.push("/");

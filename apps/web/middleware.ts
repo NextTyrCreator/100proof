@@ -22,7 +22,7 @@ export async function middleware(request: NextRequest) {
 
   const { data } = await supabase.auth.getUser();
   const path = request.nextUrl.pathname;
-  const open = path === "/" || path.startsWith("/auth/") || path.startsWith("/api/auth/code");
+  const open = path === "/" || path === "/information" || path.startsWith("/auth/") || path.startsWith("/api/auth/code");
   if (!data.user && !open) {
     const redirect = request.nextUrl.clone();
     redirect.pathname = "/";

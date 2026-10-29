@@ -42,6 +42,41 @@ export async function deleteUserFile(id: string) {
   await fetch(`${baseUrl}/files/${id}`, { method: "DELETE", headers: authHeaders(key) }).catch(() => undefined);
 }
 
+export type SpokenTurn = { startMs: number; endMs: number; text: string };
+
+/** Mono 16-bit WAV at 16 or 24 kHz. Returns the turns with their times inside the clip. */
+export async function transcribeWav(audio: Blob, timeoutMs: number): Promise<{ transcript: string; turns: SpokenTurn[] }> {
+  const { key, baseUrl } = config();
+  const body = new FormData();
+  body.set(
+    "request",
+    new Blob([JSON.stringify({ model: META_MODELS.voice, audioEncoding: "WAV", mode: "ENDPOINTING" })], {
+      type: "application/json",
+    }),
+  );
+  body.set("audio", audio, "narration.wav");
+  const response = await fetch(`${baseUrl}/asr/transcribe`, {
+    method: "POST",
+    headers: { ...authHeaders(key), Accept: "application/json" },
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) throw new Error(`The narration service returned ${response.status}.`);
+  const payload = (await response.json()) as {
+    transcript?: unknown;
+    turns?: Array<{ startMs?: unknown; endMs?: unknown; transcript?: unknown }>;
+  };
+  const turns: SpokenTurn[] = [];
+  for (const turn of payload.turns ?? []) {
+    if (typeof turn.transcript !== "string" || !turn.transcript.trim()) continue;
+    const startMs = typeof turn.startMs === "number" && Number.isFinite(turn.startMs) ? Math.max(0, turn.startMs) : 0;
+    const endMs = typeof turn.endMs === "number" && Number.isFinite(turn.endMs) ? Math.max(startMs, turn.endMs) : startMs;
+    turns.push({ startMs, endMs, text: turn.transcript.trim() });
+  }
+  const transcript = typeof payload.transcript === "string" ? payload.transcript.trim() : turns.map((turn) => turn.text).join(" ");
+  return { transcript, turns };
+}
+
 export type MetaText = { text: string; status: string };
 
 export async function createResponse(body: Record<string, unknown>, timeoutMs: number): Promise<MetaText> {

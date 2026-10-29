@@ -4,8 +4,8 @@ Every variable the system reads, where it is used, whether it is a secret, and w
 
 | Variable | Used by | Secret | Purpose | Rotation |
 | --- | --- | --- | --- | --- |
-| `META_MODEL_API_KEY` | worker, web server | yes | Meta Model API (SAM 3.1, Muse Spark, Muse Wonder, Muse Image, Voice). Standard mode key. The scan review route reads it on the server. It is never sent to the browser. | Regenerate at dev.meta.ai; update Fly + GitHub secrets |
-| `META_MODEL_API_BASE_URL` | worker | no | `https://api.meta.ai/v1` | n/a |
+| `META_MODEL_API_KEY` | worker, web server, eval script | yes | Meta Model API (Muse Spark 1.3 and Muse Voice Transcribe 1.0 in this build). Standard mode key. The scan review and evidence routes read it on the server. `apps/web/scripts/eval/run.ts` reads it from `apps/web/.env.local` or the shell. It is never sent to the browser. | Regenerate at dev.meta.ai; update Fly + GitHub secrets |
+| `META_MODEL_API_BASE_URL` | worker, web server | no | `https://api.meta.ai/v1`. Transcription posts to `{base}/asr/transcribe` | n/a |
 | `NEXT_PUBLIC_SUPABASE_URL` | web, worker | no | Supabase project URL | n/a |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | web | no (public, RLS-bound) | Browser client; RLS enforces access | Supabase → API settings |
 | `SUPABASE_SERVICE_ROLE_KEY` | worker only | yes | Bypasses RLS; worker scopes every query by org_id | Supabase → API settings; never in web |

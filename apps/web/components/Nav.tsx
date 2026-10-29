@@ -3,7 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const links = [{ href: "/", label: "My inventory" }];
+const links = [
+  { href: "/", label: "My inventory", current: (path: string) => path === "/" || path === "/inventory" },
+  { href: "/information", label: "Information", current: (path: string) => path === "/information" },
+];
 
 export function Nav({ onNavigate }: { onNavigate?: () => void } = {}) {
   const path = usePathname();
@@ -11,12 +14,7 @@ export function Nav({ onNavigate }: { onNavigate?: () => void } = {}) {
   return (
     <nav className="nav" aria-label="Primary">
       {links.map((link) => (
-        <Link
-          key={link.href}
-          href={link.href}
-          onClick={onNavigate}
-          aria-current={path === "/" || path === "/inventory" ? "page" : undefined}
-        >
+        <Link key={link.href} href={link.href} onClick={onNavigate} aria-current={link.current(path) ? "page" : undefined}>
           {link.label}
         </Link>
       ))}

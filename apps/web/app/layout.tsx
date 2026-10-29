@@ -1,7 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { cookies } from "next/headers";
 import { Shell } from "../components/Shell";
-import type { Audience } from "../components/Audience";
 import { siteUrl } from "../lib/site";
 import { createServerSupabase } from "../lib/supabase/server";
 import "./globals.css";
@@ -15,15 +13,18 @@ export const metadata: Metadata = {
   title: { default: `100proof | ${title}`, template: "%s · 100proof" },
   description,
   keywords: [
-    "personal property",
+    "home inventory app",
+    "household inventory app",
+    "home inventory for insurance",
+    "home inventory app for insurance",
+    "NAIC home inventory app",
+    "home inventory checklist",
     "personal property insurance",
-    "home inventory",
     "renters insurance",
     "homeowners insurance",
-    "commercial property",
-    "insuring property",
-    "contents coverage",
-    "verifiable inventory",
+    "contents claim",
+    "replacement cost",
+    "actual cash value",
   ],
   alternates: { canonical: "/" },
   openGraph: {
@@ -44,21 +45,14 @@ export const viewport: Viewport = {
   themeColor: "#ffffff",
 };
 
-function readAudience(value: string | undefined): Audience | null {
-  if (value === "insured" || value === "provider") return value;
-  return null;
-}
-
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createServerSupabase();
   const { data } = await supabase.auth.getUser();
-  const cookieStore = await cookies();
-  const audience = readAudience(cookieStore.get("100proof_audience")?.value);
 
   return (
     <html lang="en">
       <body>
-        <Shell signedIn={Boolean(data.user)} email={data.user?.email ?? null} audience={audience}>
+        <Shell signedIn={Boolean(data.user)} email={data.user?.email ?? null}>
           {children}
         </Shell>
       </body>

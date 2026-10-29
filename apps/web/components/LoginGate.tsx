@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAudience } from "./Audience";
 import { InsurerInquiry } from "./InsurerInquiry";
-import { MarketPitch } from "./MarketPitch";
 import { InventoryDocument } from "./InventoryDocument";
 
 /** Matches Auth → Sign In / Providers → Email → Email OTP Expiration. */
@@ -38,10 +37,8 @@ function clearPending() {
 }
 
 export function LoginGate({ email }: { email: string | null }) {
-  const { audience, setAudience } = useAudience();
+  const { audience } = useAudience();
   if (email) return <InventoryDocument />;
-
-  const view = audience;
 
   return (
     <div className="narrow login" style={{ "--lead": LEAD.length } as React.CSSProperties}>
@@ -73,25 +70,8 @@ export function LoginGate({ email }: { email: string | null }) {
               <span className="login-promise-time">verified proof</span>, and insure it properly.
             </span>
         </p>
-        {view === null ? <MarketPitch /> : null}
-        {view === null ? <AudienceChoice onChoose={setAudience} /> : null}
-        {view === "insured" ? <EmailLogin /> : null}
-        {view === "provider" ? <InsurerInquiry /> : null}
+        {audience === "insured" ? <EmailLogin /> : <InsurerInquiry />}
       </div>
-    </div>
-  );
-}
-
-function AudienceChoice({ onChoose }: { onChoose: (audience: "insured" | "provider") => void }) {
-  return (
-    <div className="choice">
-      <p className="choice-label">Which describes you?</p>
-      <button type="button" className="button" onClick={() => onChoose("insured")}>
-        I&apos;m getting insurance
-      </button>
-      <button type="button" className="button quiet" onClick={() => onChoose("provider")}>
-        I&apos;m an insurance provider
-      </button>
     </div>
   );
 }
@@ -350,9 +330,17 @@ function EmailLogin() {
         </form>
       ) : (
         <form className="stack login-form" onSubmit={sendCode}>
+          <label className="login-cue" htmlFor="login-email">
+            <span>Create your verifiable inventory now</span>
+            <svg className="login-cue-arrow" viewBox="0 0 36 40" aria-hidden="true">
+              <path d="M4 6c14-2 24 6 22 26" />
+              <path d="M19 26l7 8 6-9" />
+            </svg>
+          </label>
           <label className="field">
             <span>Email</span>
             <input
+              id="login-email"
               name="email"
               type="email"
               autoComplete="email"

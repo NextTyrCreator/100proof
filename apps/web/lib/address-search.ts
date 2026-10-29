@@ -34,7 +34,7 @@ export type AddressHit = {
   magicKey: string;
 };
 
-export type AddressPointHit = {
+type AddressPointHit = {
   label: string;
   latitude: number;
   longitude: number;
@@ -45,7 +45,7 @@ export type AddressPointHit = {
  * `countryCode` is the geocoder's country filter. Europe is many countries.
  * Add a country by adding one entry.
  */
-export type AddressRegion = {
+type AddressRegion = {
   id: string;
   label: string;
   countryCode: string;
@@ -96,12 +96,12 @@ export const ADDRESS_REGION_IDS = ADDRESS_REGIONS.map((region) => region.id) as 
   ...(typeof ADDRESS_REGIONS)[number]["id"][],
 ];
 
-export type AddressRegionId = (typeof ADDRESS_REGIONS)[number]["id"];
+type AddressRegionId = (typeof ADDRESS_REGIONS)[number]["id"];
 
 const SUGGEST_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/suggest";
 const CANDIDATE_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates";
 
-export function addressRegionById(id: string): AddressRegion | null {
+function addressRegionById(id: string): AddressRegion | null {
   return ADDRESS_REGIONS.find((region) => region.id === id) ?? null;
 }
 

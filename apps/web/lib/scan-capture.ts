@@ -1,12 +1,12 @@
 /** Record a small MP4. The camera stays sharp; the file is a 480p, 12 fps encode. */
 
-export const CLIP_VIDEO_BPS = 700_000;
-export const CLIP_AUDIO_BPS = 64_000;
+const CLIP_VIDEO_BPS = 700_000;
+const CLIP_AUDIO_BPS = 64_000;
 const FRAME_WIDTH = 854;
 const FRAME_HEIGHT = 480;
 const FRAME_MS = 1000 / 12;
 
-export function pickMimeType() {
+function pickMimeType() {
   if (typeof MediaRecorder === "undefined") return "";
   const types = ["video/mp4", "video/webm;codecs=vp8,opus", "video/webm"];
   return types.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";

@@ -1,9 +1,23 @@
 "use client";
 
-import { useState } from "react";
-import { formatMoney, GROUP_UNDER_USD, userEnteredItem, type HomeInventory, type RoomItem } from "../lib/inventory";
+import { useMemo, useState } from "react";
+import { sendEvidence, type EvidenceSend } from "../lib/evidence-client";
+import { openRequests, SHOWN_AT_ONCE, type EvidenceRequest } from "../lib/evidence-requests";
+import {
+  formatClock,
+  formatMoney,
+  formatWhen,
+  GROUP_UNDER_USD,
+  userEnteredItem,
+  type ChangeSource,
+  type EvidenceKind,
+  type HomeInventory,
+  type RoomItem,
+  type SaidFact,
+} from "../lib/inventory";
 import { keptLineSchema } from "../lib/review-shape";
 import { rememberKeptValues } from "../lib/kept-values";
+import type { ItemPatch } from "../lib/inventory-merge";
 
 function safeHttp(value: string | null) {
   if (!value) return null;
@@ -16,45 +30,85 @@ function safeHttp(value: string | null) {
   }
 }
 
-type ItemPatch = {
-  userNote?: string;
-  userValueUsd?: number | null;
-  photoUrl?: string | null;
-  priceUsd?: number | null;
-  cashValueUsd?: number | null;
-  depreciationNote?: string | null;
-  valueBasis?: string | null;
-  brand?: string | null;
-  markings?: string | null;
-  sourceUrl?: string | null;
-  serial?: string | null;
-  ageYears?: number | null;
+const FIELD_LABELS: Record<string, string> = {
+  count: "count",
+  countSettled: "count settled",
+  identitySettled: "model settled",
+  brand: "brand",
+  markings: "model or mark",
+  serial: "serial",
+  priceUsd: "replacement",
+  cashValueUsd: "cash value",
+  userValueUsd: "price paid",
+  ageYears: "age",
+  valueBasis: "basis",
 };
+
+function shown(key: string, value: string | number | boolean | null) {
+  if (value === null) return "none";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (key === "serial") return "recorded";
+  if (typeof value === "number" && (key === "priceUsd" || key === "cashValueUsd" || key === "userValueUsd")) return formatMoney(value);
+  return String(value);
+}
+
+function heardLabel(fact: SaidFact) {
+  if (fact.heard === "typed") return "You answered";
+  if (fact.heard === "transcript") return "You said (transcribed)";
+  return "You said (heard by the video model)";
+}
 
 export function ItemizedRooms({
   inventoryId,
   rooms,
+  clips = [],
   address,
   region,
   onRenameRoom,
   onDeleteItem,
   onUpdateItem,
   onAddItem,
+  onEvidence,
+  onSkip,
+  onSaveMedia,
+  onFilmFocus,
 }: {
   inventoryId: string;
   rooms: HomeInventory["rooms"];
+  clips?: HomeInventory["clips"];
   address: string;
   region: string;
   onRenameRoom: (inventoryId: string, roomId: string, title: string) => void;
   onDeleteItem: (inventoryId: string, roomId: string, itemId: string) => void;
   onUpdateItem: (inventoryId: string, roomId: string, itemId: string, patch: ItemPatch) => void;
   onAddItem: (inventoryId: string, item: RoomItem) => void;
+  onEvidence: (
+    inventoryId: string,
+    roomId: string,
+    itemId: string,
+    patch: ItemPatch,
+    source: ChangeSource,
+    evidenceRef: string | null,
+    said?: SaidFact,
+  ) => void;
+  onSkip: (inventoryId: string, roomId: string, itemId: string, kind: EvidenceKind) => void;
+  onSaveMedia: (inventoryId: string, name: string, blob: Blob) => Promise<string | null>;
+  /** Film another clip to settle these lines. Absent while the first scan is still on screen. */
+  onFilmFocus?: (itemIds: string[]) => void;
 }) {
   const [photoError, setPhotoError] = useState("");
   const [checkingId, setCheckingId] = useState("");
+  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [addedName, setAddedName] = useState("");
   const [addedCount, setAddedCount] = useState("1");
   const [addedNote, setAddedNote] = useState("");
+
+  const requests = useMemo(() => openRequests(rooms), [rooms]);
+  const clipNumber = useMemo(() => new Map(clips.map((clip, index) => [clip.id, index + 1])), [clips]);
+
+  function findItem(roomId: string, itemId: string) {
+    return rooms.find((room) => room.id === roomId)?.items.find((item) => item.id === itemId) ?? null;
+  }
 
   function keepPrice(item: RoomItem, amount: number) {
     const line = keptLineSchema.safeParse({
@@ -67,45 +121,50 @@ export function ItemizedRooms({
     if (line.success) rememberKeptValues([line.data]);
   }
 
-  async function checkPicture(roomId: string, item: RoomItem, file: File) {
+  async function checkPicture(roomId: string, item: RoomItem, file: File, kind: Exclude<EvidenceSend, "answer">) {
+    if (!file.type.startsWith("image/") || file.size > 8 * 1024 * 1024) {
+      setPhotoError("Use an image under 8 MB.");
+      return;
+    }
     if (item.photoUrl?.startsWith("blob:")) URL.revokeObjectURL(item.photoUrl);
     const photoUrl = URL.createObjectURL(file);
     onUpdateItem(inventoryId, roomId, item.id, { photoUrl });
     setCheckingId(item.id);
     setPhotoError("");
     try {
-      const body = new FormData();
-      body.set("image", file);
-      body.set("name", item.name);
-      body.set("itemType", item.itemType ?? "");
-      body.set("brand", item.brand ?? "");
-      body.set("markings", item.markings ?? "");
-      body.set("serial", item.serial ?? "");
-      body.set("note", item.userNote);
-      body.set("ageYears", item.ageYears == null ? "" : String(item.ageYears));
-      body.set("address", address);
-      body.set("region", region);
-      const response = await fetch("/api/scan/review/photo", { method: "POST", body });
-      const payload = (await response.json().catch(() => null)) as
-        | (ItemPatch & { error?: string })
-        | null;
-      if (!response.ok || !payload || payload.priceUsd == null) {
-        setPhotoError(payload?.error || "The picture was saved. The price was not updated.");
+      const [result, photoPath] = await Promise.all([
+        sendEvidence({ kind, item, image: file, answer: "", address, region, inventoryId }),
+        onSaveMedia(inventoryId, `${item.id}-${crypto.randomUUID().slice(0, 8)}.jpg`, file),
+      ]);
+      if ("error" in result) {
+        if (photoPath) onUpdateItem(inventoryId, roomId, item.id, { photoPath });
+        setPhotoError(result.error);
         return;
       }
-      onUpdateItem(inventoryId, roomId, item.id, {
-        priceUsd: payload.priceUsd,
-        cashValueUsd: payload.cashValueUsd ?? null,
-        depreciationNote: payload.depreciationNote ?? null,
-        valueBasis: payload.valueBasis ?? null,
-        brand: payload.brand ?? item.brand,
-        markings: payload.markings ?? item.markings,
-        sourceUrl: payload.sourceUrl ?? null,
-        serial: payload.serial ?? item.serial,
-        ageYears: payload.ageYears ?? item.ageYears,
-      });
-    } catch {
-      setPhotoError("The picture was saved. The price was not updated.");
+      const source: ChangeSource = kind === "label" ? "label photo" : kind === "receipt" ? "receipt photo" : "photo";
+      onEvidence(inventoryId, roomId, item.id, { ...result.patch, photoPath }, source, photoPath);
+      if (result.patch.priceUsd != null && result.patch.priceUsd >= 1) keepPrice(item, result.patch.priceUsd);
+    } finally {
+      setCheckingId("");
+    }
+  }
+
+  async function sendAnswer(request: EvidenceRequest) {
+    const item = findItem(request.roomId, request.itemId);
+    const answer = (answers[request.key] ?? "").trim().slice(0, 500);
+    if (!item || !answer) return;
+    setCheckingId(item.id);
+    setPhotoError("");
+    try {
+      const result = await sendEvidence({ kind: "answer", item, image: null, answer, address, region, inventoryId });
+      const said: SaidFact = { text: answer.slice(0, 300), clipId: null, atSec: null, heard: "typed" };
+      if ("error" in result) {
+        onEvidence(inventoryId, request.roomId, item.id, {}, "your answer", null, said);
+        setPhotoError(result.error);
+        return;
+      }
+      onEvidence(inventoryId, request.roomId, item.id, result.patch, "your answer", null, said);
+      setAnswers((current) => ({ ...current, [request.key]: "" }));
     } finally {
       setCheckingId("");
     }
@@ -121,8 +180,79 @@ export function ItemizedRooms({
     setAddedNote("");
   }
 
+  const top = requests.slice(0, SHOWN_AT_ONCE);
+  const wider = requests.filter((request) => request.kind === "wider").map((request) => request.itemId);
+
   return (
     <div className="stack">
+      {top.length > 0 ? (
+        <section className="sheet ask-queue" aria-label="Still open">
+          <p className="total-label">Still open</p>
+          <p className="hint">
+            {requests.length === 1
+              ? "One line is not settled. Settle it now, or leave it for the person who reviews the file."
+              : `${requests.length} lines are not settled. The ones with the most money in doubt are first.`}
+          </p>
+          <ul className="ask-list">
+            {top.map((request) => {
+              const item = findItem(request.roomId, request.itemId);
+              if (!item) return null;
+              const busy = checkingId === item.id;
+              return (
+                <li key={request.key} className="ask-item">
+                  <p className="ask-prompt">{request.prompt}</p>
+                  <p className="ask-why">
+                    {request.why} · {request.roomTitle}
+                  </p>
+                  {request.kind === "label" || request.kind === "receipt" ? (
+                    <label className="button quiet ask-snap">
+                      {busy ? "Checking" : request.kind === "label" ? "Snap the label" : "Snap the receipt"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        disabled={busy}
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          event.target.value = "";
+                          if (file) void checkPicture(request.roomId, item, file, request.kind === "label" ? "label" : "receipt");
+                        }}
+                      />
+                    </label>
+                  ) : null}
+                  {request.kind === "wider" && onFilmFocus ? (
+                    <button type="button" className="button quiet" onClick={() => onFilmFocus(wider.length > 0 ? wider : [item.id])}>
+                      Film it
+                    </button>
+                  ) : null}
+                  {request.kind === "question" ? (
+                    <form
+                      className="ask-answer"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void sendAnswer(request);
+                      }}
+                    >
+                      <input
+                        value={answers[request.key] ?? ""}
+                        maxLength={500}
+                        placeholder="Your answer"
+                        onChange={(event) => setAnswers((current) => ({ ...current, [request.key]: event.target.value }))}
+                      />
+                      <button type="submit" className="button quiet" disabled={busy}>
+                        {busy ? "Checking" : "Send"}
+                      </button>
+                    </form>
+                  ) : null}
+                  <button type="button" className="text-button" onClick={() => onSkip(inventoryId, request.roomId, item.id, request.kind)}>
+                    Leave it
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
       {rooms.length === 0 ? (
         <p className="empty-line">Nothing was listed from this walkthrough. Add an item below, or scan again.</p>
       ) : (
@@ -142,6 +272,7 @@ export function ItemizedRooms({
                     .join(" · ");
                   const lineTotal = item.priceUsd == null ? null : item.priceUsd * item.count;
                   const cashTotal = item.cashValueUsd == null ? null : item.cashValueUsd * item.count;
+                  const seen = item.sightings.filter((sighting) => sighting.clipId);
                   return (
                     <li key={item.id}>
                       <div className="item-top">
@@ -153,6 +284,13 @@ export function ItemizedRooms({
                         </span>
                         <span>{lineTotal == null ? "No price yet" : formatMoney(lineTotal)}</span>
                       </div>
+                      {!item.countSettled || !item.identitySettled ? (
+                        <p className="item-open">
+                          {[!item.countSettled ? "Count not settled" : "", !item.identitySettled ? "Model not settled" : ""]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
+                      ) : null}
                       {identity ? <p className="item-meta">{identity}</p> : null}
                       {traits ? <p className="item-meta">{traits}</p> : null}
                       {item.detail ? <p className="item-meta">{item.detail}</p> : null}
@@ -169,13 +307,83 @@ export function ItemizedRooms({
                         </p>
                       ) : null}
                       {item.depreciationNote ? <p className="item-meta">{item.depreciationNote}</p> : null}
-                      {item.narration ? <p className="item-meta">You said: {item.narration}</p> : null}
-                      {item.valueBasis ? <p className="item-meta">{item.valueBasis}</p> : null}
-                      {source ? (
-                        <a className="item-meta" href={source}>
-                          Replacement source
-                        </a>
-                      ) : null}
+                      <details className="evidence">
+                        <summary>Evidence</summary>
+                        <dl>
+                          {seen.length > 0 ? (
+                            <>
+                              <dt>The camera</dt>
+                              <dd>
+                                {seen
+                                  .slice(0, 6)
+                                  .map((sighting) => {
+                                    const clip = sighting.clipId ? clipNumber.get(sighting.clipId) : undefined;
+                                    const at = sighting.atSec == null ? "" : ` at ${formatClock(sighting.atSec * 1000)}`;
+                                    return clip ? `clip ${clip}${at}` : `a clip${at}`;
+                                  })
+                                  .join(", ")}
+                              </dd>
+                            </>
+                          ) : null}
+                          {item.said.map((fact, index) => (
+                            <div key={`${fact.text}-${index}`}>
+                              <dt>{heardLabel(fact)}</dt>
+                              <dd>“{fact.text}”</dd>
+                            </div>
+                          ))}
+                          {item.userValueUsd != null ? (
+                            <>
+                              <dt>Price paid</dt>
+                              <dd>{formatMoney(item.userValueUsd)}, kept apart from the replacement estimate</dd>
+                            </>
+                          ) : null}
+                          {item.valueBasis ? (
+                            <>
+                              <dt>{item.valueBasis.startsWith("Exact:") ? "Exact product" : item.valueBasis.startsWith("Comparable:") ? "Comparable" : "Replacement"}</dt>
+                              <dd>
+                                {item.valueBasis}
+                                {item.pricedAt ? ` · priced ${formatWhen(item.pricedAt)}` : ""}
+                                {source ? (
+                                  <>
+                                    {" · "}
+                                    <a href={source} rel="noreferrer noopener" target="_blank">
+                                      source
+                                    </a>
+                                  </>
+                                ) : null}
+                              </dd>
+                            </>
+                          ) : null}
+                          {item.options.length > 0 ? (
+                            <>
+                              <dt>Could be</dt>
+                              <dd>
+                                {item.options
+                                  .map((option) => `${option.label} (${formatMoney(option.lowUsd)}–${formatMoney(option.highUsd)})`)
+                                  .join("; ")}
+                              </dd>
+                            </>
+                          ) : null}
+                          {item.changes.map((entry) => (
+                            <div key={entry.id}>
+                              <dt>
+                                Changed by {entry.source} · {formatWhen(entry.at)}
+                              </dt>
+                              <dd>
+                                {Object.keys(entry.after)
+                                  .map((key) => `${FIELD_LABELS[key] ?? key}: ${shown(key, entry.before[key] ?? null)} → ${shown(key, entry.after[key] ?? null)}`)
+                                  .join("; ")}
+                              </dd>
+                            </div>
+                          ))}
+                          {item.enteredBy === "you" ? (
+                            <>
+                              <dt>Entered by you</dt>
+                              <dd>Not from the scan.</dd>
+                            </>
+                          ) : null}
+                        </dl>
+                      </details>
                       {item.serial ? (
                         <details>
                           <summary>Serial, on this account and the download</summary>
@@ -183,11 +391,11 @@ export function ItemizedRooms({
                         </details>
                       ) : null}
                       {item.photoUrl ? (
-                        // The picture was added on this device for this item.
+                        // The picture was added for this item and is kept with this account.
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img className="item-photo" src={item.photoUrl} alt="" />
+                        <img className="item-photo" src={item.photoUrl} alt="" loading="lazy" />
                       ) : null}
-                      {checkingId === item.id ? <p className="item-meta">Checking this picture against the local price.</p> : null}
+                      {checkingId === item.id ? <p className="item-meta">Checking this against the local price.</p> : null}
                       <label className="field">
                         <span>Picture</span>
                         <input
@@ -196,12 +404,7 @@ export function ItemizedRooms({
                           onChange={(event) => {
                             const file = event.target.files?.[0];
                             event.target.value = "";
-                            if (!file) return;
-                            if (!file.type.startsWith("image/") || file.size > 8 * 1024 * 1024) {
-                              setPhotoError("Use an image under 8 MB.");
-                              return;
-                            }
-                            void checkPicture(room.id, item, file);
+                            if (file) void checkPicture(room.id, item, file, item.identitySettled ? "photo" : "label");
                           }}
                         />
                       </label>

@@ -18,10 +18,7 @@ export function MarketPitch() {
         </li>
         <li>
           <strong>$10–25 billion</strong>
-          <span>
-            The same estimate worldwide. Nobody publishes this number. It applies the US ratio to global insured
-            property losses, so it is an extrapolation, and it is labeled that way.
-          </span>
+          <span>The same estimate worldwide. Nobody publishes this number, so treat it as an extrapolation.</span>
         </li>
       </ul>
       <p className="market-note">

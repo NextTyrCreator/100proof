@@ -1,8 +1,6 @@
-import { ADDRESS_MATCH_MILES } from "../lib/inventory";
-
-export function AddressLine({ address, miles }: { address: string; miles: number | null }) {
-  const checked = miles != null && miles <= ADDRESS_MATCH_MILES;
-  const farther = miles != null && miles > ADDRESS_MATCH_MILES;
+export function AddressLine({ address, within }: { address: string; within: boolean | null }) {
+  const checked = within === true;
+  const farther = within === false;
 
   return (
     <div className="address-line">

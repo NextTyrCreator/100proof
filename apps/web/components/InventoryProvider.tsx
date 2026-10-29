@@ -1,10 +1,24 @@
 "use client";
 
-import { createContext, useContext, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { ADDRESS_REGION_IDS } from "../lib/address-search";
-import { HIGH_VALUE_OVER_USD, type AddressPoint, type EnteredItem, type HomeInventory, type RoomItem, type RoomShard, type ScanClip, type ScanPlace } from "../lib/inventory";
+import {
+  type AddressPoint,
+  type ChangeSource,
+  type EnteredItem,
+  type EvidenceKind,
+  type HomeInventory,
+  type RoomItem,
+  type SaidFact,
+  type ScanClip,
+  type ScanPlace,
+} from "../lib/inventory";
+import { applyPatch, mergeRooms, withChange, type ItemPatch, type ReviewMode } from "../lib/inventory-merge";
+import type { ItemEvent } from "../lib/inventory-record";
+import { fromListEntry, fromLoaded, listResponseSchema, savable, toSaveRequest } from "../lib/inventory-sync";
 import { reviewItemSchema, reviewResultSchema, type ReviewResult } from "../lib/review-shape";
+import { createBrowserSupabase } from "../lib/supabase/browser";
 
 const titleSchema = z.string().max(80);
 const addressSchema = z.string().max(300);
@@ -22,11 +36,15 @@ export const scanPlaceSchema = z.object({
   capturedAt: z.string().min(1).max(40),
 });
 
+type SaveState = "idle" | "saving" | "saved" | "failed";
+
 type InventoryContextValue = {
   inventories: HomeInventory[];
   selected: HomeInventory | null;
+  saveState: SaveState;
   startInventory: () => void;
   selectInventory: (id: string) => void;
+  loadInventory: (id: string) => Promise<void>;
   setInventoryTitle: (id: string, title: string) => void;
   setAddressRegion: (id: string, regionId: string) => void;
   setHomeAddress: (id: string, address: string) => void;
@@ -34,95 +52,29 @@ type InventoryContextValue = {
   pinAddress: (id: string, point: AddressPoint) => void;
   setScanPlace: (id: string, place: ScanPlace) => void;
   sealRecord: (id: string, hash: string, sealedAt: string) => void;
-  setScanReview: (id: string, review: ReviewResult, mode?: "replace" | "append" | "continue") => void;
+  setScanReview: (id: string, review: ReviewResult, mode?: ReviewMode, focusIds?: string[]) => void;
   addRoomItem: (inventoryId: string, item: RoomItem) => void;
   renameRoom: (inventoryId: string, roomId: string, title: string) => void;
   deleteRoomItem: (inventoryId: string, roomId: string, itemId: string) => void;
-  updateRoomItem: (
+  updateRoomItem: (inventoryId: string, roomId: string, itemId: string, patch: ItemPatch) => void;
+  applyEvidence: (
     inventoryId: string,
     roomId: string,
     itemId: string,
-    patch: {
-      userNote?: string;
-      userValueUsd?: number | null;
-      photoUrl?: string | null;
-      priceUsd?: number | null;
-      cashValueUsd?: number | null;
-      depreciationNote?: string | null;
-      valueBasis?: string | null;
-      brand?: string | null;
-      markings?: string | null;
-      sourceUrl?: string | null;
-      serial?: string | null;
-      ageYears?: number | null;
-    },
+    patch: ItemPatch,
+    source: ChangeSource,
+    evidenceRef: string | null,
+    said?: SaidFact,
   ) => void;
+  skipRequest: (inventoryId: string, roomId: string, itemId: string, kind: EvidenceKind) => void;
   addClip: (clip: Omit<ScanClip, "sourceKept">) => void;
+  updateClip: (inventoryId: string, clipId: string, patch: Partial<Pick<ScanClip, "storagePath" | "posterPath">>) => void;
   addItem: (item: EnteredItem) => void;
+  /** Upload to the private bucket. Returns the storage path, or null when it did not save. */
+  saveMedia: (inventoryId: string, name: string, blob: Blob) => Promise<string | null>;
 };
 
 const InventoryContext = createContext<InventoryContextValue | null>(null);
-
-function samePiece(existing: RoomItem, item: RoomItem) {
-  return (
-    existing.name.trim().toLowerCase() === item.name.trim().toLowerCase() &&
-    (existing.brand ?? "") === (item.brand ?? "") &&
-    (existing.markings ?? "") === (item.markings ?? "") &&
-    (existing.serial ?? "") === (item.serial ?? "") &&
-    (existing.color ?? "") === (item.color ?? "") &&
-    (existing.size ?? "") === (item.size ?? "")
-  );
-}
-
-function groupedMatch(existing: RoomItem, item: RoomItem) {
-  return (
-    existing.grouped &&
-    item.grouped &&
-    existing.category === item.category &&
-    existing.itemType === item.itemType &&
-    existing.brand === item.brand &&
-    existing.markings === item.markings &&
-    existing.wearer === item.wearer &&
-    existing.sizeBand === item.sizeBand
-  );
-}
-
-function mergeRooms(current: RoomShard[], incoming: RoomShard[], continued: boolean): RoomShard[] {
-  const rooms = current.map((room) => ({ ...room, items: room.items.map((item) => ({ ...item })) }));
-  for (const next of incoming) {
-    const room = rooms.find((entry) => entry.title.trim().toLowerCase() === next.title.trim().toLowerCase());
-    if (!room) {
-      rooms.push(next);
-      continue;
-    }
-    for (const item of next.items) {
-      const match = item.grouped
-        ? room.items.find((existing) => groupedMatch(existing, item))
-        : continued
-          ? room.items.find((existing) => !existing.grouped && samePiece(existing, item))
-          : undefined;
-      if (match) {
-        if (item.grouped) match.count = continued ? Math.max(match.count, item.count) : match.count + item.count;
-        continue;
-      }
-      room.items.push(item);
-    }
-  }
-  return rooms;
-}
-
-export function combinePieceReviews(base: ReviewResult, next: ReviewResult): ReviewResult {
-  return { rooms: mergeRooms(base.rooms, next.rooms, true) };
-}
-
-function money(value: number | null | undefined) {
-  if (value === undefined) return undefined;
-  if (value === null) return { success: true as const, data: null };
-  return z.number().finite().nonnegative().max(1_000_000).safeParse(value);
-}
-
-/** Stable across server and client so a refresh paints the blank form, not a dead end. */
-const OPENING_DRAFT_ID = "opening-draft";
 
 function blankInventory(id: string, number: number): HomeInventory {
   return {
@@ -133,30 +85,170 @@ function blankInventory(id: string, number: number): HomeInventory {
     addressRegion: "",
     addressPoint: null,
     place: null,
+    locationCheck: null,
     recordHash: null,
     sealedAt: null,
     rooms: [],
     clips: [],
     items: [],
+    savedVersion: 0,
+    loaded: true,
+    createdAt: new Date().toISOString(),
+    coverUrl: "",
   };
 }
 
+function eventKind(source: ChangeSource): ItemEvent["kind"] {
+  if (source === "clip") return "clip";
+  if (source === "your answer") return "answer";
+  if (source === "your edit") return "edit";
+  return "photo";
+}
+
 export function InventoryProvider({ children }: { children: React.ReactNode }) {
-  const [inventories, setInventories] = useState<HomeInventory[]>(() => [blankInventory(OPENING_DRAFT_ID, 1)]);
-  const [selectedId, setSelectedId] = useState<string | null>(OPENING_DRAFT_ID);
+  // A draft exists on the first paint so a refresh shows the title and country form.
+  const [inventories, setInventories] = useState<HomeInventory[]>(() => [blankInventory(crypto.randomUUID(), 1)]);
+  const [selectedId, setSelectedId] = useState<string | null>(() => inventories[0]?.id ?? null);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
+  const inventoriesRef = useRef(inventories);
+  inventoriesRef.current = inventories;
+  const orgIdRef = useRef<string | null>(null);
+  const dirtyRef = useRef(new Set<string>());
+  const loggedRef = useRef(new Set<string>());
+  const pendingEventsRef = useRef(new Map<string, ItemEvent[]>());
+  const savingRef = useRef(false);
+  const saveTimerRef = useRef<number | null>(null);
+  const supabaseRef = useRef<ReturnType<typeof createBrowserSupabase> | null>(null);
+
+  const markDirty = useCallback((id: string) => {
+    dirtyRef.current.add(id);
+  }, []);
+
+  const queueEvent = useCallback((inventoryId: string, event: ItemEvent) => {
+    const list = pendingEventsRef.current.get(inventoryId) ?? [];
+    list.push(event);
+    pendingEventsRef.current.set(inventoryId, list);
+  }, []);
+
+  const fetchList = useCallback(async () => {
+    const response = await fetch("/api/inventories", { cache: "no-store" });
+    if (!response.ok) return;
+    const parsed = listResponseSchema.safeParse(await response.json().catch(() => null));
+    if (!parsed.success) return;
+    orgIdRef.current = parsed.data.orgId;
+    setInventories((current) => {
+      const known = new Set(current.map((inventory) => inventory.id));
+      const fresh = parsed.data.inventories.filter((entry) => !known.has(entry.id)).map(fromListEntry);
+      if (fresh.length === 0) return current;
+      const savedTop = fresh.reduce((max, inventory) => Math.max(max, inventory.number), 0);
+      return [...current, ...fresh].map((inventory) =>
+        inventory.savedVersion === 0 && inventory.clips.length === 0 && inventory.number <= savedTop
+          ? { ...inventory, number: savedTop + 1 }
+          : inventory,
+      );
+    });
+  }, []);
+
+  useEffect(() => {
+    void fetchList();
+  }, [fetchList]);
+
+  const flush = useCallback(async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    try {
+      for (const id of [...dirtyRef.current]) {
+        const inventory = inventoriesRef.current.find((entry) => entry.id === id);
+        if (!inventory || !savable(inventory)) {
+          dirtyRef.current.delete(id);
+          continue;
+        }
+        const fromChanges: ItemEvent[] = inventory.rooms.flatMap((room) =>
+          room.items.flatMap((item) =>
+            item.changes
+              .filter((entry) => !loggedRef.current.has(entry.id))
+              .map((entry) => ({
+                id: entry.id,
+                itemId: item.id,
+                kind: eventKind(entry.source),
+                evidence: { source: entry.source, ref: entry.evidenceRef, at: entry.at },
+                before: entry.before,
+                after: entry.after,
+              })),
+          ),
+        );
+        const queued = pendingEventsRef.current.get(id) ?? [];
+        const events = [...queued, ...fromChanges].slice(0, 200);
+        const body = toSaveRequest(inventory, events);
+        if (!body) {
+          dirtyRef.current.delete(id);
+          setSaveState("failed");
+          continue;
+        }
+        dirtyRef.current.delete(id);
+        setSaveState("saving");
+        const response = await fetch(`/api/inventories/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const payload = (await response.json().catch(() => null)) as { version?: number; orgId?: string; eventsSaved?: boolean } | null;
+        if (!response.ok || typeof payload?.version !== "number") {
+          dirtyRef.current.add(id);
+          setSaveState("failed");
+          continue;
+        }
+        if (payload.orgId) orgIdRef.current = payload.orgId;
+        if (payload.eventsSaved !== false) {
+          for (const event of events) loggedRef.current.add(event.id);
+          pendingEventsRef.current.set(
+            id,
+            (pendingEventsRef.current.get(id) ?? []).filter((event) => !events.includes(event)),
+          );
+        }
+        const version = payload.version;
+        setInventories((current) => current.map((entry) => (entry.id === id ? { ...entry, savedVersion: version } : entry)));
+        setSaveState("saved");
+      }
+    } finally {
+      savingRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (dirtyRef.current.size === 0) return;
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => void flush(), 900);
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+  }, [inventories, flush]);
 
   const value = useMemo<InventoryContextValue>(() => {
     const selected = inventories.find((inventory) => inventory.id === selectedId) ?? null;
 
     function update(id: string, change: (inventory: HomeInventory) => HomeInventory) {
+      markDirty(id);
       setInventories((current) => current.map((inventory) => (inventory.id === id ? change(inventory) : inventory)));
+    }
+
+    function updateItem(inventoryId: string, roomId: string, itemId: string, change: (item: RoomItem) => RoomItem | null) {
+      update(inventoryId, (inventory) => ({
+        ...inventory,
+        rooms: inventory.rooms.map((room) =>
+          room.id === roomId
+            ? { ...room, items: room.items.map((item) => (item.id === itemId ? (change(item) ?? item) : item)) }
+            : room,
+        ),
+      }));
     }
 
     return {
       inventories,
       selected,
+      saveState,
       startInventory: () => {
         const id = crypto.randomUUID();
         setInventories((current) => {
@@ -166,6 +258,16 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
         setSelectedId(id);
       },
       selectInventory: (id) => setSelectedId(id),
+      loadInventory: async (id) => {
+        const existing = inventoriesRef.current.find((inventory) => inventory.id === id);
+        if (existing?.loaded) return;
+        const response = await fetch(`/api/inventories/${id}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const loaded = fromLoaded(await response.json().catch(() => null));
+        if (!loaded) return;
+        for (const room of loaded.rooms) for (const item of room.items) for (const entry of item.changes) loggedRef.current.add(entry.id);
+        setInventories((current) => current.map((inventory) => (inventory.id === id ? loaded : inventory)));
+      },
       setInventoryTitle: (id, title) => {
         const parsed = titleSchema.safeParse(title);
         if (!parsed.success) return;
@@ -191,9 +293,7 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
           ...inventory,
           homeAddress: parsed.data,
           addressPoint:
-            inventory.addressPoint && inventory.addressPoint.label !== parsed.data.trim()
-              ? null
-              : inventory.addressPoint,
+            inventory.addressPoint && inventory.addressPoint.label !== parsed.data.trim() ? null : inventory.addressPoint,
         }));
       },
       setAddressPoint: (id, point) => {
@@ -220,18 +320,25 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
         if (!parsed.success) return;
         update(id, (inventory) => ({ ...inventory, recordHash: parsed.data, sealedAt }));
       },
-      setScanReview: (id, review, mode = "replace") => {
+      setScanReview: (id, review, mode = "replace", focusIds = []) => {
         const parsed = reviewResultSchema.safeParse(review);
         if (!parsed.success) return;
         update(id, (inventory) => ({
           ...inventory,
-          rooms:
-            mode === "replace" ? parsed.data.rooms : mergeRooms(inventory.rooms, parsed.data.rooms, mode === "continue"),
+          rooms: mode === "replace" ? parsed.data.rooms : mergeRooms(inventory.rooms, parsed.data.rooms, mode, focusIds),
         }));
       },
       addRoomItem: (inventoryId, item) => {
         const parsed = reviewItemSchema.safeParse(item);
         if (!parsed.success) return;
+        queueEvent(inventoryId, {
+          id: crypto.randomUUID(),
+          itemId: parsed.data.id,
+          kind: "added",
+          evidence: { source: "your edit" },
+          before: null,
+          after: { name: parsed.data.name, count: parsed.data.count },
+        });
         update(inventoryId, (inventory) => {
           const existing = inventory.rooms.find((room) => room.title === "Added by you");
           if (!existing) {
@@ -242,9 +349,7 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
           }
           return {
             ...inventory,
-            rooms: inventory.rooms.map((room) =>
-              room.id === existing.id ? { ...room, items: [...room.items, parsed.data] } : room,
-            ),
+            rooms: inventory.rooms.map((room) => (room.id === existing.id ? { ...room, items: [...room.items, parsed.data] } : room)),
           };
         });
       },
@@ -257,111 +362,81 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
         }));
       },
       updateRoomItem: (inventoryId, roomId, itemId, patch) => {
-        const note = patch.userNote === undefined ? undefined : z.string().max(500).safeParse(patch.userNote);
-        if (note && !note.success) return;
-        const price = money(patch.userValueUsd);
-        if (price && !price.success) return;
-        const replacement = money(patch.priceUsd);
-        if (replacement && !replacement.success) return;
-        const cash = money(patch.cashValueUsd);
-        if (cash && !cash.success) return;
-        const photo =
-          patch.photoUrl === undefined
-            ? undefined
-            : patch.photoUrl === null
-              ? { success: true as const, data: null }
-              : z.string().max(2_000).safeParse(patch.photoUrl);
-        if (photo && !photo.success) return;
-        const basis = patch.valueBasis === undefined ? undefined : z.string().max(300).safeParse(patch.valueBasis ?? "");
-        const brand =
-          patch.brand === undefined
-            ? undefined
-            : patch.brand === null
-              ? { success: true as const, data: null }
-              : z.string().trim().max(80).safeParse(patch.brand);
-        if (brand && !brand.success) return;
-        const markings =
-          patch.markings === undefined
-            ? undefined
-            : patch.markings === null
-              ? { success: true as const, data: null }
-              : z.string().trim().max(160).safeParse(patch.markings);
-        if (markings && !markings.success) return;
-        if (basis && !basis.success) return;
-        const worn = patch.depreciationNote === undefined ? undefined : z.string().max(300).safeParse(patch.depreciationNote ?? "");
-        if (worn && !worn.success) return;
-        const source =
-          patch.sourceUrl === undefined
-            ? undefined
-            : patch.sourceUrl === null
-              ? { success: true as const, data: null }
-              : z.string().max(300).safeParse(patch.sourceUrl);
-        if (source && !source.success) return;
-        const serial =
-          patch.serial === undefined
-            ? undefined
-            : patch.serial === null
-              ? { success: true as const, data: null }
-              : z.string().max(80).safeParse(patch.serial);
-        if (serial && !serial.success) return;
-        const ageYears =
-          patch.ageYears === undefined
-            ? undefined
-            : patch.ageYears === null
-              ? { success: true as const, data: null }
-              : z.number().finite().nonnegative().max(100).safeParse(patch.ageYears);
-        if (ageYears && !ageYears.success) return;
-        update(inventoryId, (inventory) => ({
-          ...inventory,
-          rooms: inventory.rooms.map((room) =>
-            room.id === roomId
-              ? {
-                  ...room,
-                  items: room.items.map((item) =>
-                    item.id === itemId
-                      ? {
-                          ...item,
-                          userNote: note ? note.data : item.userNote,
-                          userValueUsd: price ? price.data : item.userValueUsd,
-                          photoUrl: photo ? photo.data : item.photoUrl,
-                          priceUsd: replacement ? replacement.data : item.priceUsd,
-                          cashValueUsd: cash ? cash.data : item.cashValueUsd,
-                          depreciationNote: worn ? worn.data || null : item.depreciationNote,
-                          valueBasis: basis ? basis.data || null : item.valueBasis,
-                          brand: brand ? brand.data || null : item.brand,
-                          markings: markings ? markings.data || null : item.markings,
-                          sourceUrl: source ? source.data : item.sourceUrl,
-                          serial: serial ? serial.data : item.serial,
-                          ageYears: ageYears ? ageYears.data : item.ageYears,
-                          highValue: (replacement ? replacement.data ?? 0 : item.priceUsd ?? 0) > HIGH_VALUE_OVER_USD,
-                        }
-                      : item,
-                  ),
-                }
-              : room,
-          ),
-        }));
+        updateItem(inventoryId, roomId, itemId, (item) => applyPatch(item, patch));
+      },
+      applyEvidence: (inventoryId, roomId, itemId, patch, source, evidenceRef, said) => {
+        updateItem(inventoryId, roomId, itemId, (item) => {
+          const next = applyPatch(item, patch);
+          if (!next) return null;
+          const withSaid = said ? { ...next, said: [...next.said, said].slice(-20) } : next;
+          return withChange(item, withSaid, source, evidenceRef);
+        });
+      },
+      skipRequest: (inventoryId, roomId, itemId, kind) => {
+        updateItem(inventoryId, roomId, itemId, (item) =>
+          item.skipped.includes(kind) ? item : { ...item, skipped: [...item.skipped, kind] },
+        );
       },
       deleteRoomItem: (inventoryId, roomId, itemId) => {
+        const item = inventoriesRef.current
+          .find((inventory) => inventory.id === inventoryId)
+          ?.rooms.find((room) => room.id === roomId)
+          ?.items.find((entry) => entry.id === itemId);
+        if (item) {
+          queueEvent(inventoryId, {
+            id: crypto.randomUUID(),
+            itemId,
+            kind: "removed",
+            evidence: { source: "your edit" },
+            before: { name: item.name.slice(0, 400), count: item.count },
+            after: null,
+          });
+        }
         update(inventoryId, (inventory) => ({
           ...inventory,
           rooms: inventory.rooms.map((room) =>
-            room.id === roomId ? { ...room, items: room.items.filter((item) => item.id !== itemId) } : room,
+            room.id === roomId ? { ...room, items: room.items.filter((entry) => entry.id !== itemId) } : room,
           ),
         }));
       },
       addClip: (clip) => {
         const id = selectedIdRef.current;
         if (!id) return;
-        update(id, (inventory) => ({ ...inventory, clips: [...inventory.clips, { ...clip, sourceKept: true }] }));
+        update(id, (inventory) => ({
+          ...inventory,
+          clips: [...inventory.clips, { ...clip, sourceKept: true }],
+          coverUrl: inventory.coverUrl || clip.posterUrl,
+        }));
+      },
+      updateClip: (inventoryId, clipId, patch) => {
+        update(inventoryId, (inventory) => ({
+          ...inventory,
+          clips: inventory.clips.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip)),
+        }));
       },
       addItem: (item) => {
         const id = selectedIdRef.current;
         if (!id) return;
         update(id, (inventory) => ({ ...inventory, items: [...inventory.items, item] }));
       },
+      saveMedia: async (inventoryId, name, blob) => {
+        if (!/^[A-Za-z0-9._-]{1,120}$/.test(name)) return null;
+        if (!orgIdRef.current) await fetchList();
+        const orgId = orgIdRef.current;
+        if (!orgId) return null;
+        try {
+          supabaseRef.current ??= createBrowserSupabase();
+          const path = `${orgId}/${inventoryId}/${name}`;
+          const { error } = await supabaseRef.current.storage
+            .from("evidence")
+            .upload(path, blob, { contentType: blob.type || "application/octet-stream", upsert: false });
+          return error ? null : path;
+        } catch {
+          return null;
+        }
+      },
     };
-  }, [inventories, selectedId]);
+  }, [inventories, selectedId, saveState, markDirty, queueEvent, fetchList]);
 
   return <InventoryContext.Provider value={value}>{children}</InventoryContext.Provider>;
 }

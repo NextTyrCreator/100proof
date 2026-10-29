@@ -32,6 +32,9 @@ samples/raw/
 *.mp4
 *.mov
 !samples/README.md
+# eval cases point at local media; results can quote what was said in a home
+apps/web/scripts/eval/cases/
+apps/web/scripts/eval/results/
 # Local draft of the governance files. Canonical copies are at the repo root.
 /gov/
 # One-time commit instructions. Not part of the project.

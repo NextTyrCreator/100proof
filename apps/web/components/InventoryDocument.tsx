@@ -11,15 +11,18 @@ import {
   replacementTotal,
   inventoryCsv,
   inventoryLabel,
-  milesBetween,
+  locationWithin,
   proofText,
   videoExtension,
   type HomeInventory,
   type ScanClip,
 } from "../lib/inventory";
 import { addressRegionLabel } from "../lib/address-search";
+import { unresolvedCount } from "../lib/evidence-requests";
+import { downloadJson } from "../lib/inventory-export";
 import { AddressLine } from "./AddressLine";
 import { useInventory } from "./InventoryProvider";
+import { InventoryMeasures } from "./InventoryMeasures";
 import { ItemizedRooms } from "./ItemizedRooms";
 
 function downloadProof(inventory: HomeInventory) {
@@ -65,16 +68,37 @@ function mailHref(inventory: HomeInventory) {
 }
 
 function createdOn(inventory: HomeInventory) {
-  return inventory.sealedAt ?? inventory.clips[0]?.startedAt ?? "";
+  return inventory.sealedAt ?? inventory.clips[0]?.startedAt ?? inventory.createdAt;
 }
+
+const SAVE_LINES = {
+  idle: "",
+  saving: "Saving to your account.",
+  saved: "Saved to your account.",
+  failed: "Not saved yet. It will try again on the next change.",
+} as const;
 
 export function InventoryDocument() {
   const router = useRouter();
-  const { inventories, selected, startInventory, selectInventory, renameRoom, deleteRoomItem, updateRoomItem, addRoomItem } = useInventory();
+  const {
+    inventories,
+    selected,
+    saveState,
+    startInventory,
+    selectInventory,
+    loadInventory,
+    renameRoom,
+    deleteRoomItem,
+    updateRoomItem,
+    addRoomItem,
+    applyEvidence,
+    skipRequest,
+    saveMedia,
+  } = useInventory();
   const [openId, setOpenId] = useState<string | null>(null);
   const [openedId, setOpenedId] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
-  const saved = inventories.filter((inventory) => inventory.clips.length > 0);
+  const saved = inventories.filter((inventory) => inventory.savedVersion !== 0 || inventory.clips.length > 0);
   const opened = saved.find((inventory) => inventory.id === openedId) ?? null;
   const clips = opened?.clips ?? [];
   const items = opened?.items ?? [];
@@ -89,10 +113,17 @@ export function InventoryDocument() {
     router.push("/scan");
   }
 
-  function openSaved(id: string) {
-    selectInventory(id);
+  function openSaved(inventory: HomeInventory) {
+    selectInventory(inventory.id);
     setSummaryOpen(false);
-    setOpenedId((current) => (current === id ? null : id));
+    setOpenedId((current) => (current === inventory.id ? null : inventory.id));
+    if (!inventory.loaded) void loadInventory(inventory.id);
+  }
+
+  function filmFocus(inventoryId: string, itemIds: string[]) {
+    selectInventory(inventoryId);
+    const focus = itemIds.slice(0, 10).map(encodeURIComponent).join(",");
+    router.push(`/scan?add=1&focus=${focus}`);
   }
 
   useEffect(() => {
@@ -134,26 +165,28 @@ export function InventoryDocument() {
       {saved.length > 0 ? (
         <ul className="inventory-picks">
           {saved.map((inventory) => {
-            const clip = inventory.clips[0];
+            const cover = inventory.clips[0]?.posterUrl || inventory.coverUrl;
             const when = createdOn(inventory);
+            const stillOpen = inventory.loaded ? unresolvedCount(inventory.rooms) : 0;
             return (
               <li key={inventory.id}>
                 <button
                   type="button"
                   className="inventory-pick"
                   aria-pressed={inventory.id === openedId}
-                  onClick={() => openSaved(inventory.id)}
+                  onClick={() => openSaved(inventory)}
                 >
                   <span className="inventory-pick-photo">
-                    {clip?.posterUrl ? (
+                    {cover ? (
                       // The still is a frame from the scan kept with this inventory.
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={clip.posterUrl} alt="" />
+                      <img src={cover} alt="" loading="lazy" />
                     ) : null}
                   </span>
                   <span className="inventory-pick-copy">
                     <span className="inventory-pick-title">{inventoryLabel(inventory)}</span>
                     {when ? <span className="inventory-pick-date">{formatWhen(when)}</span> : null}
+                    {stillOpen > 0 ? <span className="inventory-pick-date">{stillOpen} still open</span> : null}
                   </span>
                 </button>
               </li>
@@ -161,19 +194,21 @@ export function InventoryDocument() {
           })}
         </ul>
       ) : null}
-      {opened ? (
+      {opened && !opened.loaded ? (
+        <article className="sheet" aria-busy="true">
+          <p className="total-label">{inventoryLabel(opened)}</p>
+          <p className="hint">Opening this inventory.</p>
+        </article>
+      ) : null}
+      {opened && opened.loaded ? (
       <article className="sheet">
         <p className="total-label">{inventoryLabel(opened)}</p>
         {addressRegionLabel(opened.addressRegion) ? (
           <p className="confirm-address">{addressRegionLabel(opened.addressRegion)}</p>
         ) : null}
-        {opened.homeAddress.trim() ? (
-          <AddressLine
-            address={opened.homeAddress.trim()}
-            miles={opened.place && opened.addressPoint ? milesBetween(opened.place, opened.addressPoint) : null}
-          />
-        ) : null}
+        {opened.homeAddress.trim() ? <AddressLine address={opened.homeAddress.trim()} within={locationWithin(opened)} /> : null}
         {opened.recordHash ? <p className="record-hash">Record {opened.recordHash}</p> : null}
+        {SAVE_LINES[saveState] ? <p className="hint">{SAVE_LINES[saveState]}</p> : null}
         <ul className="rooms">
           {clips.map((clip, index) => {
             const open = openId === clip.id;
@@ -191,21 +226,27 @@ export function InventoryDocument() {
                   <span className="room-copy">
                     <span className="room-name">{title}</span>
                     <span className="room-items">
-                      {formatWhen(clip.startedAt)} · {formatClock(clip.durationMs)} · source kept
+                      {formatWhen(clip.startedAt)} · {formatClock(clip.durationMs)} ·{" "}
+                      {clip.storagePath ? "kept on your account" : "on this device"}
                     </span>
                   </span>
-                  <span className="value-pill pending">Pending</span>
                 </button>
                 {open ? (
                   <div className="room-detail">
-                    <video src={clip.videoUrl} controls playsInline poster={clip.posterUrl || undefined} />
+                    {clip.videoUrl ? (
+                      <video src={clip.videoUrl} controls playsInline preload="metadata" poster={clip.posterUrl || undefined} />
+                    ) : (
+                      <p>This clip did not upload, so it is not on your account.</p>
+                    )}
                     <p>
                       Recorded {formatWhen(clip.startedAt)}. The source video stays with this proof. Download it to
                       this device as well.
                     </p>
-                    <button type="button" className="button quiet" onClick={() => downloadVideo(clip, index)}>
-                      Download video
-                    </button>
+                    {clip.videoUrl ? (
+                      <button type="button" className="button quiet" onClick={() => downloadVideo(clip, index)}>
+                        Download video
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
               </li>
@@ -250,26 +291,29 @@ export function InventoryDocument() {
         <ItemizedRooms
           inventoryId={opened.id}
           rooms={opened.rooms}
+          clips={opened.clips}
           address={opened.homeAddress}
           region={addressRegionLabel(opened.addressRegion)}
           onRenameRoom={renameRoom}
           onDeleteItem={deleteRoomItem}
           onUpdateItem={updateRoomItem}
           onAddItem={addRoomItem}
+          onEvidence={applyEvidence}
+          onSkip={skipRequest}
+          onSaveMedia={saveMedia}
+          onFilmFocus={(itemIds) => filmFocus(opened.id, itemIds)}
         />
         <div className="sheet-actions">
-          {opened.place ? (
-            <button
-              type="button"
-              className="button quiet"
-              onClick={() => {
-                selectInventory(opened.id);
-                router.push("/scan?add=1");
-              }}
-            >
-              Scan again
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="button quiet"
+            onClick={() => {
+              selectInventory(opened.id);
+              router.push("/scan?add=1");
+            }}
+          >
+            Scan again
+          </button>
           <button type="button" className="button brand" aria-expanded={summaryOpen} onClick={() => setSummaryOpen((open) => !open)}>
             View summary
           </button>
@@ -306,7 +350,11 @@ export function InventoryDocument() {
             <button type="button" className="button" onClick={() => downloadProof(opened)}>
               Download
             </button>
+            <button type="button" className="button quiet" onClick={() => downloadJson(opened)}>
+              Claim file (JSON)
+            </button>
           </div>
+          <InventoryMeasures inventory={opened} />
         </section>
       ) : null}
     </div>

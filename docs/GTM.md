@@ -23,9 +23,47 @@ Indie judging looks for creativity, ambition, and whether it works. Startup judg
 
 The line to say in the room: take a video of the property, get an automated inventory with verified proof, and insure it properly. The line not to say: the inventory is 100% accurate, or the policy is bound.
 
-## Next plan
+## The capability
 
-A technical product plan is coming in after this commit. Read it as a proposal. Keep the parts that make the record accurate enough that someone will pay for it, and that make the product likable enough to tell someone else about. Drop the parts that fight the product already built.
+100proof notices what it cannot establish, asks for the missing evidence, and uses that evidence to complete a contents file a claims professional can review.
+
+Two chairs and one counted is the example. The clip lists the chairs, says the count is not settled, and asks for a wider shot. The person films one more clip, the line becomes four chairs, and the record says it changed because of that clip. A label close-up does the same for a model number.
+
+Each line keeps its sources apart: what the camera showed and when, what the person said, what a receipt shows, what a comparable supports, and what a reviewer changed. Lines that are still not settled go on a "Still open" list and into the export as exceptions. They are not hidden and they are not guessed.
+
+## Lines
+
+- Renter: "Your belongings, documented before you need them."
+- Buyer: "AI that prepares contents-insurance claims from phone video."
+
+The buyer is the claims side: adjusters, independent adjusting firms, and third-party administrators who have to produce a contents file. Renters are the distribution. A renter who documents an apartment before anything happens arrives at a claim with a file that is already most of the way there.
+
+## Price hypotheses
+
+Payments are off. These are prices to test, not prices we charge or have proven. Nothing here goes on the site.
+
+| Offer | Hypothesis | What has to justify it |
+| --- | --- | --- |
+| Completed contents file | $200–$400 per file; $250 in the model | Evidence collected, lines reconciled, valuation prepared, exceptions listed, handed off |
+| Enterprise account | $60,000 per account-year to start | Permissions, integrations, audit controls, reporting. Bundled files are deducted from usage, and one file is billed once however many parties open it. |
+| Sponsored renter inventory | $12 for the first completion, $6 per funded household-year | A sponsor (renters insurer, property manager, mover) that can show the benefit |
+| Self-service scan | A lower tier | A smaller job with a lower cost to deliver |
+
+Buyer math, illustrative. At 2,500 files a year, the $60,000 fee adds $24 a file, so the buyer pays $274 a completed file. At a $75 loaded hourly handling cost, break-even is 3.65 hours saved per file; twice the fee is 7.31 hours. Eight hours down to one saves $525, which leaves $251 after the fee. Four hours down to one saves $225, which does not carry the price alone. At 500 files a year the fee adds $120 a file, $370 in all. The first commercial test is finding the class of contents work where the hours saved clear that line. A lighter tier serves simpler cases.
+
+The app records what each file cost us to make (`cost_ledger`: model calls, latency, bytes, audio minutes). The export carries a work statement marked hypothetical, so a buyer can see what would have been billed without anything being billed.
+
+## Campaign
+
+One path, shown the same way everywhere: film a room, the list appears, one line says it is not sure, the person snaps the label or films one more clip, the line settles, and the file goes out with its sources. The campaign sells the moment the app asks for the right thing, not a feature list.
+
+- Renters: before a move-in or a renewal. "Five minutes, one room at a time. Keep it for the day you need it."
+- Agents and property managers: hand it to a renter at signing. The sponsored price is the pitch to them.
+- Adjusters: a file that arrives with exceptions already listed, instead of a spreadsheet to chase.
+
+Likability is a short path and an app that asks a fair question. It never asks for something the clip already showed, and it asks at most three things at once.
+
+## Plan kept from before the product plan
 
 These stay:
 
@@ -46,19 +84,22 @@ State regulators and the NAIC already tell people to make that list. The Texas D
 
 100proof does not decide coverage, and it does not say what an insurer pays for the product.
 
-“The only verifiable personal inventory tool” is not a claim we can defend. Other products record video, recognize objects, or seal a file. The defensible difference is a video the person films, reviewed into an inventory tied to the account, plus a correctness bar we measure on each reviewed scan.
+“The only verifiable personal inventory tool” is not a claim we can defend. Other products record video, recognize objects, or seal a file. The defensible difference is a video the person films, reviewed into an inventory tied to the account, that asks for the evidence it is missing and keeps each source apart. The correctness bar is measured on recorded cases, guided against unguided.
 
 ## Accuracy goals
 
-Two different numbers. Do not mix them.
+These are goals, measured on recorded cases with a ground-truth list (`docs/EVAL.md`). They are not a measured product rate until EVAL.md has the numbers, and the site does not print them.
 
-| Bar | Meaning | Status |
+| Measure | Meaning | Goal |
 | --- | --- | --- |
-| 90% | A single item at or above this model score can be treated as recognized. Below it, the person names the item. | Product rule. Not an accuracy rate. |
-| 95% | Minimum share of reviewed items kept without a correction on a scan. `kept / (kept + corrected)`. | Goal. Not a measured result. |
-| 98% | The aim for that same ratio. | Goal. Not a measured result. |
+| Found | Share of truth lines that appear on the inventory. | 95%, aim 98% |
+| Count right | Share of truth lines with the right quantity. | 95% after guidance |
+| Identity right | Brand and model match, where the truth has them. | 95% after guidance |
+| Value within 25% | Replacement within 25% of the truth amount. | 80% |
+| Wrong but settled | A line marked settled that is wrong. This is the number that costs trust. | 0 |
+| Open lines | Lines that still need evidence. Guidance should lower it. | Lower after guidance than before |
 
-No score is shown until a scan has at least one kept or corrected item. Typed items are not counted as recognition. The formula lives in `apps/web/lib/accuracy.ts`.
+Guided versus unguided is the claim we test: the same walkthrough, scored before and after the requests are answered. If guidance does not move count and identity, the evidence loop is not earning its place.
 
 ## Figures on the site
 
@@ -99,8 +140,54 @@ Insurers want a list they can settle. The tools they hand out today are mostly f
 
 ## Launch page and search
 
-The first screen carries the hook, the two labeled money figures, the Los Angeles example, and the regulator line. There is no social account yet, so the page has to be the pitch.
+Every page load opens on For insured with the email sign-in. The pitch, the money figures, the Los Angeles example, and the regulator line moved to `/information`, which anyone can read without signing in.
 
-Search is the visible words, the title, the description, `/llms.txt`, `/llm.txt`, `robots.txt`, and `sitemap.xml`. The phrases are personal property, personal property insurance, home inventory, renters insurance, homeowners insurance, commercial property, insuring property, and contents coverage. Ranking first is not something the page can promise. Hidden keyword lists would not earn it.
+Search is the visible words, the title, the description, `/information`, `/llms.txt`, `/llm.txt`, `robots.txt`, and `sitemap.xml`. Ranking first is not something the page can promise. Hidden keyword lists would not earn it.
 
 `/llms.txt` is the file assistants should read. `/llm.txt` points at it.
+
+### What people search for
+
+Monthly US searches, DataForSEO via unbuilt.software, read 2026-10-29. The cluster is about 6,190 searches a month across 25 phrases, up 65.5% over the last quarter, and peaks in September.
+
+| Phrase | Searches a month | Note |
+| --- | --- | --- |
+| home inventory app | 1,300 | $3.32 a click |
+| household inventory app | 1,300 | |
+| home inventory | 480 | |
+| home inventory checklist, homeowners inventory checklist, household inventory list, house inventory list | 320 each | Checklist intent; answer it on the page |
+| naic home inventory app | 210 | People looking for the regulator's app; say plainly we are not it |
+| home inventory template | 170 | |
+| home inventory for insurance | 140 | $14.69 a click, up 22% year over year |
+| inventory for insurance | 140 | $38.70 a click |
+| home inventory app for insurance | 50 | |
+
+The cost per click on the insurance phrases says insurers and agents pay for this intent. Those are the phrases the Information page answers in its headings.
+
+### How assistants pick sources
+
+- ChatGPT, Perplexity, Gemini, and Google's AI Overviews search before they answer, with rewritten sub-queries, and cite the pages that match those sub-queries. Pages whose headings and paragraphs match the questions people ask are cited more (arXiv 2610.15033, 158,099 answers).
+- Gemini quotes single sentences. Every answer on `/information` is written so one sentence stands alone.
+- FAQ markup and structured data help across sites but do not make a site cited on their own. Assistants name brands they already know, so the rest is earned: comparison and "best home inventory app" roundups (Perplexity favors them), YouTube (cited in about half of AI Overview answers), and Reddit (about the same).
+- The answer bots must be able to read the page: OAI-SearchBot, ChatGPT-User, PerplexityBot, Perplexity-User, Claude-SearchBot, Claude-User, Googlebot, and Bingbot are allowed in `robots.txt`. `llms.txt` is optional and cheap.
+
+### Plan
+
+1. `/information` answers the ten questions people ask, server-rendered, with FAQ and app markup that repeats the visible text. Done.
+2. One 60-second YouTube walkthrough of the evidence loop, titled with the phrase "home inventory app for insurance". After the demo is recorded.
+3. Ask to be listed on the home inventory app roundups that already rank, with the measured eval numbers once they exist.
+4. Answer the recurring Reddit questions (renters, after a fire, what the adjuster wants) as a person, linking only when it is the answer.
+
+### What we say about the work, and what we do not
+
+- 100proof uses the same valuation method an adjuster uses (replacement cost, like kind and quality, actual cash value after physical depreciation) to prepare the record. The carrier decides. We do not call it an adjuster or an "on-demand adjuster", and we do not say it tells anyone what an insurer will pay: only a licensed adjuster, public adjuster, or attorney may interpret coverage or negotiate, and the Iowa Insurance Division asks companies to remove wording that implies adjusting.
+- We name the models by version, Muse Spark 1.3 and Muse Voice Transcribe 1.0, instead of saying "the most up-to-date models".
+- We do not claim regulatory or compliance predictive analysis. That is not built. The method follows regulator guidance (NAIC, TDI, CDI) and the adjuster valuation rules.
+- The pipeline is a sequence of checked Meta model calls: list, price, evidence check, transcription. We describe it that way rather than as a team of agents.
+- For an insurer, the benefit is a documented replacement estimate before a loss and a file with its exceptions listed, not a payout prediction.
+
+### Claims response: what we measure
+
+The industry baseline is J.D. Power's 2026 property claims study: 40.7 days from first notice of loss to final payment, and satisfaction falls from 762 when a claim finishes within 10 days to 595 past 31 (2025). Contents files average hundreds of lines; one contents vendor reports a 24.83-day cycle and 536.71 lines a claim.
+
+100proof cannot shorten a carrier's cycle in a hackathon. What it can show is the part it controls, per inventory, in the Measures panel and the claim file: time from the first clip to a reviewable file, the share of lines settled at submission, exceptions left for the reviewer, lines changed by evidence, and model latency. Hours saved per claim stay a hypothesis until a carrier or administrator compares documentation requests after submission against their own files.

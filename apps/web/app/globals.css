@@ -143,7 +143,8 @@ button {
   background: var(--proof-surface-soft);
 }
 
-.audience-tabs button {
+.audience-tabs button,
+.audience-tabs a {
   border: 0;
   background: transparent;
   color: var(--proof-text-secondary);
@@ -152,32 +153,135 @@ button {
   cursor: pointer;
   font: inherit;
   white-space: nowrap;
+  text-decoration: none;
 }
 
 .audience-tabs button:hover,
-.audience-tabs button[aria-current="page"] {
+.audience-tabs button[aria-current="page"],
+.audience-tabs a:hover,
+.audience-tabs a[aria-current="page"] {
   color: var(--proof-navy);
   background: var(--proof-surface-soft);
 }
 
-.audience-tabs button:focus-visible {
+.audience-tabs button:focus-visible,
+.audience-tabs a:focus-visible {
   outline: 2px solid var(--proof-navy);
   outline-offset: 3px;
 }
 
-.choice {
-  display: grid;
-  gap: 12px;
-  margin-top: 28px;
+.info h1 {
+  margin: 0 0 18px;
+  font-size: clamp(1.9rem, 6vw, 2.5rem);
+  letter-spacing: -0.04em;
+  line-height: 1.08;
 }
 
-.choice-label {
+.info-lead {
+  margin: 0 0 14px;
+  color: var(--proof-navy);
+  font-size: 1.0625rem;
+  line-height: 1.55;
+}
+
+.info-section {
+  display: grid;
+  gap: 14px;
+  margin-top: 44px;
+  animation: rise var(--proof-duration) var(--proof-ease) both;
+}
+
+.info-section h2 {
   margin: 0;
+  font-size: 1.3rem;
+  letter-spacing: -0.03em;
+}
+
+.info-section p {
+  margin: 0;
+  color: var(--proof-navy);
+  line-height: 1.55;
+}
+
+.info-answer {
+  display: grid;
+  gap: 8px;
+  padding: 18px 0;
+  border-top: 1px solid color-mix(in srgb, var(--proof-navy) 8%, transparent);
+}
+
+.info-answer h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--proof-navy);
+}
+
+.info-answer p {
   color: var(--proof-text-secondary);
 }
 
-.choice .button {
+.info-facts,
+.info-steps,
+.info-sources {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--proof-navy);
+  line-height: 1.5;
+}
+
+.info-actions {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.info-actions .button,
+.info-cta {
   width: 100%;
+  text-decoration: none;
+}
+
+.info-steps strong {
+  color: var(--proof-navy);
+}
+
+.info-benefits {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.info-benefits li {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: var(--proof-radius-card);
+  background: var(--proof-surface-soft);
+  box-shadow: var(--proof-shadow);
+}
+
+.info-benefits h3 {
+  margin: 0;
+  color: var(--proof-navy);
+  font-size: 1.02rem;
+}
+
+.info-benefits p {
+  color: var(--proof-text-secondary);
+}
+
+@media (min-width: 720px) {
+  .info-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .info-benefits {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .main {
@@ -1185,13 +1289,48 @@ h1 {
   width: 100%;
 }
 
+.login-cue {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: -10px;
+  color: var(--proof-navy);
+  font-size: 1.08rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.login-cue-arrow {
+  flex: none;
+  width: 30px;
+  height: 34px;
+  margin-top: 6px;
+  fill: none;
+  stroke: var(--proof-blue);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  animation: cue-nudge var(--proof-duration-slow) var(--proof-ease) calc((var(--lead) + 16) * var(--proof-stagger)) 4 alternate both;
+}
+
+@keyframes cue-nudge {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(5px);
+  }
+}
+
 .login-send,
 .button.brand {
   position: relative;
   isolation: isolate;
   overflow: hidden;
   min-height: 56px;
-  border: 2px solid var(--proof-navy);
+  border: 1px solid transparent;
   border-radius: 14px;
   color: #fff;
   background: color-mix(in srgb, var(--proof-blue) 78%, var(--proof-navy));
@@ -1430,6 +1569,158 @@ h1 {
   color: var(--proof-text-secondary);
   cursor: pointer;
   padding: 8px 0;
+}
+
+.ask-live,
+.ask-item {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: var(--proof-radius-control);
+  border-left: 3px solid var(--proof-blue);
+  background: var(--proof-surface-soft);
+  animation: rise var(--proof-duration) var(--proof-ease) both;
+}
+
+.ask-from {
+  margin: 0;
+  color: var(--proof-text-secondary);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ask-prompt {
+  margin: 0;
+  color: var(--proof-navy);
+  font-weight: 600;
+}
+
+.ask-why {
+  margin: 0;
+  color: var(--proof-text-secondary);
+  font-size: 0.9rem;
+}
+
+.ask-actions,
+.ask-answer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.ask-answer input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--proof-navy) 14%, transparent);
+  border-radius: var(--proof-radius-control);
+  font: inherit;
+}
+
+.ask-queue {
+  display: grid;
+  gap: 12px;
+}
+
+.ask-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ask-snap {
+  position: relative;
+  justify-self: start;
+  overflow: hidden;
+}
+
+.ask-snap input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.item-open {
+  margin: 0;
+  color: var(--proof-blue);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.evidence summary {
+  cursor: pointer;
+  color: var(--proof-navy);
+  font-size: 0.92rem;
+}
+
+.evidence dl {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+
+.evidence dt {
+  color: var(--proof-text-secondary);
+  font-size: 0.8rem;
+}
+
+.evidence dd {
+  margin: 0 0 4px;
+  color: var(--proof-navy);
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.measures {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--proof-navy) 8%, transparent);
+}
+
+.measures summary {
+  cursor: pointer;
+  color: var(--proof-navy);
+  font-weight: 650;
+}
+
+.measures dl {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.measures dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.measures dt {
+  color: var(--proof-text-secondary);
+  font-size: 0.88rem;
+}
+
+.measures dd {
+  margin: 0;
+  color: var(--proof-navy);
+  font-size: 0.88rem;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.measures-head {
+  margin: 16px 0 0;
+  color: var(--proof-text-secondary);
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .footer {
@@ -1671,6 +1962,7 @@ h1 {
   .login-promise-time::after,
   .login-send::before,
   .button.brand::before,
+  .login-cue-arrow,
   .steps li::before {
     animation: none;
     transition: none;

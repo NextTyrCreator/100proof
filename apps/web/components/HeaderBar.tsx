@@ -17,7 +17,6 @@ export function HeaderBar({ signedIn, email }: { signedIn: boolean; email: strin
   const headerRef = useRef<HTMLElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
-  const hasMenu = signedIn || audience !== null;
 
   useEffect(() => {
     setOpen(false);
@@ -68,20 +67,18 @@ export function HeaderBar({ signedIn, email }: { signedIn: boolean; email: strin
           </div>
         ) : null}
       </div>
-      {hasMenu ? (
-        <button
-          ref={toggleRef}
-          type="button"
-          className="menu-toggle"
-          aria-expanded={open}
-          aria-controls={menuId}
-          onClick={() => setOpen((current) => !current)}
-        >
-          <MenuIcon open={open} />
-          <span className="sr-only">{open ? "Close menu" : "Open menu"}</span>
-        </button>
-      ) : null}
-      {open && hasMenu
+      <button
+        ref={toggleRef}
+        type="button"
+        className="menu-toggle"
+        aria-expanded={open}
+        aria-controls={menuId}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <MenuIcon open={open} />
+        <span className="sr-only">{open ? "Close menu" : "Open menu"}</span>
+      </button>
+      {open
         ? createPortal(
             <div className="menu-sheet" id={menuId} style={{ top: barHeight }} onClick={closeFromChoice}>
               {signedIn && email ? <p className="menu-email">{email}</p> : null}

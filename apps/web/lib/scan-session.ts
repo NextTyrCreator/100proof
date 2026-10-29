@@ -2,8 +2,8 @@
 
 export const CLIP_MS = 30_000;
 export const SCAN_LIMIT_MS = 5 * 60 * 1000;
-export const PAUSE_LIMIT_MS = 15 * 60 * 1000;
-export const MAX_CLIPS = 20;
+const PAUSE_LIMIT_MS = 15 * 60 * 1000;
+const MAX_CLIPS = 20;
 
 export type CloseReason = "next" | "pause" | "finish";
 
