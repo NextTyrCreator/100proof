@@ -18,6 +18,10 @@ The sentence: 100 Proof notices what it cannot establish, asks for the missing e
 | Location as a within-1-mile result; coordinates never saved | x | | | x |
 | Cost ledger per model call; guided-versus-unguided eval harness | | x | | x |
 | Measures per inventory: lines settled, still open, changed by evidence, time to file, model calls and latency | x | x | x | x |
+| Accuracy mark per line: nine evidence signals, Strong without a receipt, receipt confirms individuality | x | x | x | x |
+| Research loop: corrections become labelled failures, one lever changes, the eval gates it | x | x | | x |
+| Testing engine: deterministic harness over the mark, invariants, ranking, and scorer; invariants exported per file | | | x | x |
+| Governance: versioned standard in every file, compliance register, sealed hash and change trail | x | | x | x |
 | Public Information page: the questions people search for, answered with sources; FAQ markup; answer bots allowed | x | | | |
 
 ## Demo, 2 minutes, one room
@@ -32,6 +36,7 @@ Filmed in one take on a phone. Any shortcut or recorded fallback is labeled on s
 | 0:50 | One more clip, wide, all four chairs | "That clip was filmed to settle the chairs." |
 | 1:00 | Live hint for the TV label, Snap it, the line changes model and price | "The label settles the model. The price moves because the model did." |
 | 1:15 | Stop. The list, the TV's Evidence panel: camera at 0:12, "you said", exact product with date, the change from the label | "Every fact says where it came from. The camera, what I said, the label, the comparable." |
+| 1:25 | The TV's accuracy mark moves to Strong, then a receipt snap makes it Receipt-confirmed; Measures shows the mark counts | "Without a receipt we push every signal the camera can give. The receipt does the one job left: it confirms this item is yours." |
 | 1:35 | Still open: one line left; Claim file (JSON) download, the exceptions block | "What it could not settle is listed, not guessed. An adjuster sees it first." |
 | 1:45 | View summary → Measures: lines settled, changed by evidence, first clip to last change, model calls | "This is what we measure on every file: how much arrived settled, what the evidence changed, and how long it took." |
 | 1:50 | EVAL.md table | "Guided against unguided on the same video. It does not decide coverage, and it is not 100% accurate. It shows what it knows and what it does not." |

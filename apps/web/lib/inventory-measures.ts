@@ -1,4 +1,6 @@
+import { accuracySummary } from "./accuracy-mark";
 import { openRequests } from "./evidence-requests";
+import { checkInventory, issueCounts } from "./invariants";
 import type { ChangeSource, HomeInventory } from "./inventory";
 
 const EVIDENCE_SOURCES: ChangeSource[] = ["label photo", "receipt photo", "photo", "clip", "your answer"];
@@ -15,7 +17,7 @@ export function documentMeasures(inventory: HomeInventory) {
   const changes = lines.flatMap((item) => item.changes);
 
   const changesBy = Object.fromEntries(
-    [...EVIDENCE_SOURCES, "your edit" as const].map((source) => [source, changes.filter((entry) => entry.source === source).length]),
+    [...EVIDENCE_SOURCES, "your edit" as const, "check" as const].map((source) => [source, changes.filter((entry) => entry.source === source).length]),
   ) as Record<ChangeSource, number>;
   const linesChangedByEvidence = lines.filter((item) =>
     item.changes.some((entry) => EVIDENCE_SOURCES.includes(entry.source)),
@@ -41,6 +43,11 @@ export function documentMeasures(inventory: HomeInventory) {
     dollarsInDoubt: Math.round(open.reduce((sum, request) => sum + request.inDoubtUsd, 0)),
     requestsLeftForReviewer: lines.reduce((sum, item) => sum + item.skipped.length, 0),
     linesChangedByEvidence,
+    accuracy: accuracySummary(lines),
+    checks: (() => {
+      const issues = checkInventory(inventory);
+      return { ...issueCounts(issues), issues: issues.slice(0, 20) };
+    })(),
     changesBy,
     firstClipAt: firstAt == null ? null : new Date(firstAt).toISOString(),
     lastChangeAt: lastAt == null ? null : new Date(lastAt).toISOString(),

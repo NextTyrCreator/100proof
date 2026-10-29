@@ -41,9 +41,23 @@ function countDoubt(item: RoomItem) {
   return unit(item) * Math.max(1, Math.ceil(item.count / 2));
 }
 
+/** Filmed clearly, these are priced from what the camera shows. A label is never asked for. */
+const LARGE_KINDS = new Set(["furniture", "appliance"]);
+const LARGE_WORDS = /\b(hot tub|spa|grill|sofa|sectional|couch|bed|daybed|table|dresser|cabinet|piano|treadmill|hoop|playset|swing set|trampoline|refrigerator|washer|dryer)\b/i;
+/** A label is worth asking for only when the likely models are this far apart, as a share of the higher price. */
+const LABEL_SPREAD = 0.4;
+
+export function labelWorthAsking(item: RoomItem) {
+  if (item.identitySettled || item.options.length < 2) return false;
+  if (LARGE_KINDS.has((item.category ?? "").toLowerCase()) || LARGE_WORDS.test(`${item.name} ${item.itemType ?? ""}`)) return false;
+  const low = Math.min(...item.options.map((option) => option.lowUsd));
+  const high = Math.max(...item.options.map((option) => option.highUsd));
+  return high > 0 && (high - low) / high > LABEL_SPREAD;
+}
+
 function open(item: RoomItem, kind: EvidenceKind) {
   if (item.enteredBy === "you" || item.skipped.includes(kind)) return false;
-  if (kind === "label") return !item.identitySettled;
+  if (kind === "label") return labelWorthAsking(item);
   if (kind === "wider") return !item.countSettled;
   if (kind === "receipt") return item.ask?.kind === "receipt" && item.userValueUsd == null;
   return item.ask?.kind === "question" && !item.said.some((fact) => fact.heard === "typed");
@@ -51,7 +65,7 @@ function open(item: RoomItem, kind: EvidenceKind) {
 
 function promptFor(item: RoomItem, kind: EvidenceKind) {
   const name = item.name.toLowerCase();
-  if (kind === "label") return `Snap the label or model plate on the ${name}.`;
+  if (kind === "label") return `Add a close photo of the label on the ${name}.`;
   if (kind === "wider") return `Step back and film every ${name} in one view.`;
   if (kind === "receipt") return `Snap the receipt for the ${name}, if you have it.`;
   return item.ask?.prompt || `Tell us more about the ${name}.`;
@@ -59,11 +73,7 @@ function promptFor(item: RoomItem, kind: EvidenceKind) {
 
 function whyFor(item: RoomItem, kind: EvidenceKind, doubt: number) {
   const amount = `$${Math.round(doubt).toLocaleString("en-US")}`;
-  if (kind === "label") {
-    return item.options.length >= 2
-      ? `The model is not readable. The likely models differ by about ${amount}.`
-      : `The brand or model is not readable. About ${amount} depends on it.`;
-  }
+  if (kind === "label") return `The likely models differ by about ${amount}. The estimate stands if you skip this.`;
   if (kind === "wider") return `Part of the group was out of view, so the count of ${item.count} is not settled.`;
   if (kind === "receipt") return "What was paid would back this line better than a comparable.";
   return "A short answer would settle this line.";

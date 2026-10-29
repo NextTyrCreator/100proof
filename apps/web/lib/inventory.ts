@@ -1,6 +1,5 @@
 import { addressRegionLabel } from "./address-search";
 
-const MAX_SCAN_MS = 5 * 60 * 1000;
 /** Ordinary goods at or above this replacement price are their own row. Under it, they are grouped. */
 export const GROUP_UNDER_USD = 100;
 export const HIGH_VALUE_OVER_USD = 500;
@@ -46,7 +45,17 @@ export type EvidenceKind = "label" | "wider" | "receipt" | "question";
 
 export type ItemAsk = { kind: EvidenceKind; prompt: string };
 
-export type ChangeSource = "label photo" | "receipt photo" | "photo" | "clip" | "your answer" | "your edit";
+export type ChangeSource = "label photo" | "receipt photo" | "photo" | "clip" | "your answer" | "your edit" | "check";
+
+export type Condition = "new" | "good" | "fair" | "worn" | "damaged";
+
+export type DamageSeverity = "minor" | "moderate" | "severe";
+
+/** Damage seen before any loss. It lowers cash value; replacement stays the price of a new one. */
+export type Damage = { note: string; severity: DamageSeverity; clipId: string | null; atSec: number | null };
+
+/** The maker the evidence points to when no name was read or spoken. It never settles the identity. */
+export type LikelyBrand = { name: string; clues: string };
 
 /** One change to a line and the evidence that caused it. */
 export type ItemChange = {
@@ -91,6 +100,8 @@ export type RoomItem = {
   serial: string | null;
   age: string | null;
   ageYears: number | null;
+  /** Useful life the cash value used. Null until a line is priced, or for kinds that do not wear on a schedule. */
+  usefulLifeYears: number | null;
   color: string | null;
   size: string | null;
   category: string | null;
@@ -99,6 +110,9 @@ export type RoomItem = {
   brand: string | null;
   /** Model, logo, or label that changes the replacement price. Not a serial. */
   markings: string | null;
+  likelyBrand: LikelyBrand | null;
+  condition: Condition | null;
+  damage: Damage | null;
   wearer: Wearer | null;
   sizeBand: SizeBand | null;
   /** Under $100 and bunched with the same kind of piece. */
@@ -275,12 +289,16 @@ export function userEnteredItem(name: string, count: number, note: string): Room
     serial: null,
     age: null,
     ageYears: null,
+    usefulLifeYears: null,
     color: null,
     size: null,
     category: "other",
     itemType: name,
     brand: null,
     markings: null,
+    likelyBrand: null,
+    condition: null,
+    damage: null,
     wearer: null,
     sizeBand: null,
     grouped: false,
@@ -370,8 +388,11 @@ export function inventoryCsv(inventory: HomeInventory) {
     "count_settled",
     "model_settled",
     "changes",
+    "condition",
+    "damage",
+    "likely_brand",
   ];
-  const blankTail = ["", "", "", ""];
+  const blankTail = ["", "", "", "", "", "", ""];
   const shared = [
     inventoryLabel(inventory),
     addressRegionLabel(inventory.addressRegion),
@@ -449,6 +470,9 @@ export function inventoryCsv(inventory: HomeInventory) {
           item.countSettled ? "yes" : "no",
           item.identitySettled ? "yes" : "no",
           item.changes.length,
+          item.condition ?? "",
+          item.damage ? `${item.damage.severity}: ${item.damage.note}` : "",
+          item.likelyBrand ? `${item.likelyBrand.name} (${item.likelyBrand.clues})` : "",
         ]
           .map(csvCell)
           .join(","),
@@ -526,6 +550,8 @@ export function proofText(inventory: HomeInventory) {
         lines.push(`  ${item.name} × ${item.count} · ${price}${cash}${yourPrice}${who}`);
         const traits = [item.brand, item.markings, item.category, item.wearer, item.sizeBand, item.color, item.size, item.age].filter(Boolean).join(" · ");
         if (traits) lines.push(`  ${traits}`);
+        if (item.likelyBrand) lines.push(`  Likely ${item.likelyBrand.name}, not confirmed: ${item.likelyBrand.clues}`);
+        if (item.condition) lines.push(`  Condition: ${item.condition}${item.damage ? ` · ${item.damage.severity} damage: ${item.damage.note}` : ""}`);
         if (item.detail) lines.push(`  ${item.detail}`);
         if (item.said.length > 0) {
           for (const fact of item.said.slice(0, 3)) lines.push(`  ${fact.heard === "typed" ? "You answered" : "You said"}: ${fact.text}`);
@@ -570,7 +596,7 @@ export function proofText(inventory: HomeInventory) {
     "",
     `Ordinary pieces under $${GROUP_UNDER_USD} are counted on a category line. Jewelry, electronics, furniture, and anything with a serial stay on their own row.`,
     "Replacement follows the brand and the marks that were visible. The exact product is used when it is for sale. Otherwise the amount is a similar item of like kind and quality in the property's zip.",
-    "Cash value is that replacement after an adjuster's depreciation estimate. Neither amount is what the carrier must pay.",
+    "Cash value is that replacement after an adjuster's depreciation estimate, including any damage the camera showed. Replacement stays the price of a new one. Neither amount is what the carrier must pay.",
     "An amount you enter stays separate from that estimate.",
     `A piece over $${HIGH_VALUE_OVER_USD} is marked high value.`,
   );

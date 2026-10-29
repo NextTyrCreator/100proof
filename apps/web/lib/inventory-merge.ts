@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { HIGH_VALUE_OVER_USD, type ChangeSource, type ItemChange, type RoomItem, type RoomShard } from "./inventory";
-import { normLabel, type ReviewResult } from "./review-shape";
+import { HIGH_VALUE_OVER_USD, type ChangeSource, type Condition, type Damage, type ItemChange, type RoomItem, type RoomShard } from "./inventory";
+import { conditionSchema, damageSchema, normLabel, revalue, worseCondition, worseDamage, type ReviewResult } from "./review-shape";
 
 export type ItemPatch = {
   userNote?: string;
@@ -20,6 +20,9 @@ export type ItemPatch = {
   identitySettled?: boolean;
   count?: number;
   countSettled?: boolean;
+  condition?: Condition | null;
+  damage?: Damage | null;
+  usefulLifeYears?: number | null;
 };
 
 export type ReviewMode = "replace" | "append" | "continue" | "focus";
@@ -56,7 +59,25 @@ function sameKind(existing: RoomItem, item: RoomItem) {
   return a === b || a.includes(b) || b.includes(a) || normLabel(existing.name).includes(b) || normLabel(item.name).includes(a);
 }
 
-const TRACKED = ["count", "countSettled", "identitySettled", "brand", "markings", "serial", "priceUsd", "cashValueUsd", "userValueUsd", "ageYears", "valueBasis"] as const;
+const TRACKED = [
+  "count",
+  "countSettled",
+  "identitySettled",
+  "brand",
+  "markings",
+  "serial",
+  "priceUsd",
+  "cashValueUsd",
+  "userValueUsd",
+  "ageYears",
+  "valueBasis",
+  "category",
+  "condition",
+] as const;
+
+function damageText(damage: Damage | null) {
+  return damage ? `${damage.severity}: ${damage.note}`.slice(0, 400) : null;
+}
 
 function change(before: RoomItem, after: RoomItem, source: ChangeSource, evidenceRef: string | null): ItemChange | null {
   const was: ItemChange["before"] = {};
@@ -68,6 +89,10 @@ function change(before: RoomItem, after: RoomItem, source: ChangeSource, evidenc
       was[key] = typeof a === "string" ? a.slice(0, 400) : a;
       now[key] = typeof b === "string" ? b.slice(0, 400) : b;
     }
+  }
+  if (damageText(before.damage) !== damageText(after.damage)) {
+    was.damage = damageText(before.damage);
+    now.damage = damageText(after.damage);
   }
   if (Object.keys(now).length === 0) return null;
   return { id: crypto.randomUUID(), at: new Date().toISOString(), source, evidenceRef, before: was, after: now };
@@ -83,6 +108,21 @@ function addSightings(match: RoomItem, item: RoomItem) {
   match.sightings = [...match.sightings, ...item.sightings].slice(-60);
   const known = new Set(match.said.map((fact) => fact.text.toLowerCase()));
   match.said = [...match.said, ...item.said.filter((fact) => !known.has(fact.text.toLowerCase()))].slice(-20);
+}
+
+/** Damage or a worse condition seen in a later clip stays on the line and lowers its cash value. */
+function adoptCondition(match: RoomItem, item: RoomItem) {
+  const damage = worseDamage(match.damage, item.damage);
+  const condition = worseCondition(match.condition, item.condition);
+  if (!match.brand && !match.likelyBrand && item.likelyBrand) match.likelyBrand = item.likelyBrand;
+  if (damage === match.damage && condition === match.condition) return;
+  match.damage = damage;
+  match.condition = condition;
+  const worn = revalue(match);
+  if (worn) {
+    match.cashValueUsd = worn.cash;
+    match.depreciationNote = worn.note;
+  }
 }
 
 function adoptIdentity(match: RoomItem, item: RoomItem) {
@@ -124,6 +164,7 @@ export function mergeRooms(
           target.count = item.count;
           target.countSettled = item.countSettled;
           if (!target.identitySettled && item.identitySettled) adoptIdentity(target, item);
+          adoptCondition(target, item);
           if (target.countSettled && target.ask?.kind === "wider") target.ask = null;
           const entry = change(before, target, "clip", item.sightings[0]?.clipId ?? null);
           if (entry) target.changes = [...target.changes, entry].slice(-40);
@@ -164,8 +205,9 @@ export function mergeRooms(
         }
       }
       if (!match.identitySettled && item.identitySettled) adoptIdentity(match, item);
+      if (!match.grouped) adoptCondition(match, item);
       const settled = change(before, match, "clip", item.sightings[0]?.clipId ?? null);
-      if (settled && ("countSettled" in settled.after || "identitySettled" in settled.after)) {
+      if (settled && ("countSettled" in settled.after || "identitySettled" in settled.after || "damage" in settled.after)) {
         match.changes = [...match.changes, settled].slice(-40);
       }
     }
@@ -206,6 +248,7 @@ export function tagReview(review: ReviewResult, clipId: string): ReviewResult {
         ...item,
         sightings: item.sightings.map((sighting) => ({ ...sighting, clipId: sighting.clipId ?? clipId })),
         said: item.said.map((fact) => ({ ...fact, clipId: fact.clipId ?? clipId })),
+        damage: item.damage ? { ...item.damage, clipId: item.damage.clipId ?? clipId } : null,
       })),
     })),
   };
@@ -245,7 +288,15 @@ export function applyPatch(item: RoomItem, patch: ItemPatch): RoomItem | null {
         ? { success: true as const, data: null }
         : z.number().finite().nonnegative().max(100).safeParse(patch.ageYears);
   const count = patch.count === undefined ? undefined : z.number().int().positive().max(999).safeParse(patch.count);
-  const checks = [note, price, replacement, cash, photo, photoPath, basis, brand, markings, worn, source, serial, pricedAt, ageYears, count];
+  const condition = patch.condition === undefined ? undefined : conditionSchema.nullable().safeParse(patch.condition);
+  const damage = patch.damage === undefined ? undefined : damageSchema.nullable().safeParse(patch.damage);
+  const usefulLifeYears =
+    patch.usefulLifeYears === undefined
+      ? undefined
+      : patch.usefulLifeYears === null
+        ? { success: true as const, data: null }
+        : z.number().finite().positive().max(80).safeParse(patch.usefulLifeYears);
+  const checks = [note, price, replacement, cash, photo, photoPath, basis, brand, markings, worn, source, serial, pricedAt, ageYears, count, condition, damage, usefulLifeYears];
   if (checks.some((check) => check && !check.success)) return null;
   const next: RoomItem = {
     ...item,
@@ -266,7 +317,12 @@ export function applyPatch(item: RoomItem, patch: ItemPatch): RoomItem | null {
     count: count?.success ? count.data : item.count,
     countSettled: patch.countSettled ?? item.countSettled,
     identitySettled: patch.identitySettled ?? item.identitySettled,
+    condition: condition?.success ? condition.data : item.condition,
+    damage: damage?.success ? damage.data : item.damage,
+    usefulLifeYears: usefulLifeYears?.success ? usefulLifeYears.data : item.usefulLifeYears,
   };
+  if (next.damage) next.condition = "damaged";
+  if (next.brand) next.likelyBrand = null;
   next.highValue = (next.priceUsd ?? 0) > HIGH_VALUE_OVER_USD;
   if (next.identitySettled) next.options = [];
   if (next.identitySettled && next.ask?.kind === "label") next.ask = null;

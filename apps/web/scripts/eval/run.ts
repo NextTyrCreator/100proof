@@ -17,8 +17,9 @@ import { scoreRooms, matchLines, truthLineSchema, type TruthLine } from "../../l
 import { openRequests, type EvidenceRequest } from "../../lib/evidence-requests";
 import type { ChangeSource, RoomItem, RoomShard } from "../../lib/inventory";
 import { combinePieceReviews, mergeRooms, patchReviewItem, tagReview } from "../../lib/inventory-merge";
-import { reviewEvidence, reviewWalkthrough, type ModelCall } from "../../lib/review-scan";
+import { priceItems, reconcileLines, reviewEvidence, reviewWalkthrough, type ModelCall } from "../../lib/review-scan";
 import type { PricePlace, ReviewResult } from "../../lib/review-shape";
+import { applyPrices, applyReconcile, knownSoFar, linesToPrice, reconcileInput } from "../../lib/scan-pipeline";
 
 const evidenceSchema = z.object({
   truth: z.string().trim().min(1).max(120),
@@ -36,7 +37,7 @@ const caseSchema = z.object({
   clips: z
     .array(z.object({ video: z.string().max(300), audio: z.string().max(300).nullable().default(null) }))
     .min(1)
-    .max(10),
+    .max(20),
   truth: z.array(truthLineSchema).min(1).max(200),
   evidence: z.array(evidenceSchema).max(50).default([]),
   maxRequests: z.number().int().min(1).max(20).default(5),
@@ -59,15 +60,34 @@ function mediaType(path: string) {
   return type;
 }
 
+/** The phone's pipeline: list each clip knowing what came before, check for repeats, then price. */
 async function walkthrough(userId: string, base: string, clips: Case["clips"], place: PricePlace, calls: ModelCall[], focus: string[] = []) {
   let combined: ReviewResult = { rooms: [] };
+  const clipIds: string[] = [];
   for (const [index, clip] of clips.entries()) {
     const video = join(base, clip.video);
     const audio = clip.audio ? await readFile(join(base, clip.audio)) : null;
-    const result = await reviewWalkthrough(userId, await readFile(video), mediaType(video), [], place, { part: index + 1, parts: clips.length }, { audio, focus });
-    calls.push(...result.calls);
-    const tagged = tagReview(result.review, randomUUID());
+    const result = await reviewWalkthrough(
+      userId,
+      await readFile(video),
+      mediaType(video),
+      { part: index + 1, parts: clips.length },
+      { audio, focus, known: knownSoFar(index === 0 ? null : combined) },
+      calls,
+    );
+    const clipId = randomUUID();
+    clipIds.push(clipId);
+    const tagged = tagReview(result.review, clipId);
     combined = index === 0 ? tagged : combinePieceReviews(combined, tagged);
+  }
+  if (focus.length === 0 && clips.length > 1) {
+    const answer = await reconcileLines(userId, reconcileInput(combined, (id) => clipIds.indexOf(id) + 1 || undefined), calls);
+    combined = applyReconcile(combined, answer).review;
+  }
+  const { lines, idsByKey } = linesToPrice(combined, new Set());
+  for (let start = 0; start < lines.length; start += 30) {
+    const priced = await priceItems(userId, lines.slice(start, start + 30), [], place, calls);
+    combined = applyPrices(combined, priced, idsByKey);
   }
   return combined;
 }
@@ -85,6 +105,10 @@ function detailOf(item: RoomItem) {
     priceUsd: item.priceUsd,
     options: item.options,
     question: item.ask?.kind === "question" ? item.ask.prompt : "",
+    category: item.category,
+    condition: item.condition,
+    damage: item.damage,
+    usefulLifeYears: item.usefulLifeYears,
   };
 }
 

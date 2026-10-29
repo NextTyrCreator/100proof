@@ -1,12 +1,12 @@
 # Go to market
 
-Checked 2026-10-28. This is the record for the hook, the figures, the accuracy goals, and competitor claims. Update it when a source or a claim changes. Do not paste a figure onto the site until it is in this file with a source or an explicit “our estimate” label.
+Checked 2026-10-29. This is the record for the hook, the figures, the accuracy goals, and competitor claims. Update it when a source or a claim changes. Do not paste a figure onto the site until it is in this file with a source or an explicit “our estimate” label.
 
 ## Hook
 
 Most people are underinsured. Don't be like them. Take a video. Get an automated inventory with verified proof, and insure it properly.
 
-The name 100proof is the brand. It means a record you can show. It is not a timer, and it is not a claim that the list is 100% accurate. A session records up to 5 minutes, in 30-second clips. Do not write “in 100 seconds” as the product limit. Do not write “100% accurate,” “100% proof” as a measured score, or that 100proof decides coverage or binds a policy. The honest close is that the person uses the inventory to insure properly. The carrier still decides what the policy pays.
+The name 100proof is the brand. It means a record you can show. It is not a timer, and it is not a claim that the list is 100% accurate. A scan records up to 10 minutes, in 30-second clips, and a later scan of the same inventory adds up to 5 more. Do not write “in 100 seconds” as the product limit. Do not write “100% accurate,” “100% proof” as a measured score, or that 100proof decides coverage or binds a policy. The honest close is that the person uses the inventory to insure properly. The carrier still decides what the policy pays.
 
 ## Hackathon
 
@@ -57,7 +57,7 @@ The app records what each file cost us to make (`cost_ledger`: model calls, late
 
 One path, shown the same way everywhere: film a room, the list appears, one line says it is not sure, the person snaps the label or films one more clip, the line settles, and the file goes out with its sources. The campaign sells the moment the app asks for the right thing, not a feature list.
 
-- Renters: before a move-in or a renewal. "Five minutes, one room at a time. Keep it for the day you need it."
+- Renters: before a move-in or a renewal. "One room at a time, talking as you go. Keep it for the day you need it."
 - Agents and property managers: hand it to a renter at signing. The sponsored price is the pitch to them.
 - Adjusters: a file that arrives with exceptions already listed, instead of a spreadsheet to chase.
 
@@ -67,7 +67,7 @@ Likability is a short path and an app that asks a fair question. It never asks f
 
 These stay:
 
-- A session is 5 minutes. It is filmed in 30-second clips. The person can pause and record again until they are done, or until the session sits for 15 minutes.
+- A scan is up to 10 minutes, and a later scan adds up to 5. It is filmed in 30-second clips. The person can pause and record again until they are done, or until the session sits for 15 minutes.
 - A photo snapped onto a line is sent through the same review and can reprice that line. A serial may identify the product. It is not placed in the price search.
 - Another clip can be added to the same inventory. Clips are reviewed in the order they were filmed, and the lines are combined. The same object still in frame does not become a second row.
 - The thing people pay for is the verification: property, equipment, and items, with the video kept beside the list. The carrier, buyer, or lender still decides what the record is worth. 100proof does not bind a policy and does not claim the list is 100% accurate.
@@ -140,7 +140,7 @@ Insurers want a list they can settle. The tools they hand out today are mostly f
 
 ## Launch page and search
 
-Every page load opens on For insured with the email sign-in. The pitch, the money figures, the Los Angeles example, and the regulator line moved to `/information`, which anyone can read without signing in.
+Every page load opens on For insured with the email sign-in, except `/?for=providers`, which opens the provider screen. Use that link in outreach to carriers, administrators, and agents. On a phone the header tabs live in the menu, so the home page repeats the choice as a two-button switch above the headline. The pitch, the money figures, the Los Angeles example, and the regulator line moved to `/information`, which anyone can read without signing in.
 
 Search is the visible words, the title, the description, `/information`, `/llms.txt`, `/llm.txt`, `robots.txt`, and `sitemap.xml`. Ranking first is not something the page can promise. Hidden keyword lists would not earn it.
 
@@ -173,10 +173,43 @@ The cost per click on the insurance phrases says insurers and agents pay for thi
 
 ### Plan
 
-1. `/information` answers the ten questions people ask, server-rendered, with FAQ and app markup that repeats the visible text. Done.
+1. `/information` answers the 15 questions people ask, server-rendered, with FAQ and app markup that repeats the visible text. Done.
 2. One 60-second YouTube walkthrough of the evidence loop, titled with the phrase "home inventory app for insurance". After the demo is recorded.
 3. Ask to be listed on the home inventory app roundups that already rank, with the measured eval numbers once they exist.
 4. Answer the recurring Reddit questions (renters, after a fire, what the adjuster wants) as a person, linking only when it is the answer.
+5. Send insurer, administrator, and agent outreach to `100proof.tech/?for=providers`, not the home page.
+6. In Search Console, confirm the site is included in Google's generative AI features, then watch impressions for the phrases in the table above.
+
+### Information page review, 2026-10-29
+
+What ranks for these phrases today: NerdWallet's "Best Home Inventory Apps and Templates", BoxTrack's "best home inventory app for insurance" comparison, vendor blogs that run the same roundup, iOS list sites, and the NAIC consumer page. The roundups pick a "best for" per product, show the app doing the job, and test claims: NerdWallet's trial is where Bevel's wrong values were found. Google's guidance for AI features asks for the same thing as for search: first-hand content that is not a commodity, images or video of the real product, and structured data that matches the visible text. Nothing extra is needed for AI Overviews. FAQ rich results are now mostly limited to government and health sites, so the FAQ markup is for understanding, not for a snippet. Collapsed answers are still indexed when they are in the first HTML.
+
+What the old page did wrong:
+
+- It read like generated marketing: a gradient card, a pill label, highlighted words in headings, and a callout card per section. None of the sites above look like that.
+- It led with an industry statistic, not with what the product does. A searcher for "home inventory app for insurance" wants to know what they will get.
+- It showed no product. Nothing on the page was first-hand.
+- The provider audience was a paragraph down the page, and on a phone the For providers tab was hidden in the menu.
+
+What changed:
+
+- The page opens with the phrase people search ("Home inventory for insurance, from a phone video"), one sentence on what you get, one action, and a text link for insurers. Free, browser, nothing to install sits under it, as roundups list it.
+- "How it works" is three numbered steps. "What one line looks like" shows a single inventory line with its evidence: the first-hand content Google asks for and roundup writers screenshot. It is labeled as an example.
+- Homeowners and providers get their own short section with four plain benefits each. The regulator facts are a list, and the $3–7 billion figure is labeled as our estimate.
+- The questions are accordions with the first one open. Two were added for the searches that exist: "Is 100proof the NAIC home inventory app?" (210 a month, and the answer is no) and "How is 100proof different from other home inventory apps?" (the roundup question).
+- The provider screen dropped the arrow and the consumer headline. It has its own headline, four points an adjuster cares about, and a short form: work email, company, name, lines of business, and an optional note.
+
+Which phrase each part answers:
+
+| Phrase | Where |
+| --- | --- |
+| home inventory app for insurance, home inventory for insurance | Title, kicker, and heading |
+| home inventory app, household inventory app | "How is 100proof different from other home inventory apps?" |
+| naic home inventory app | "Is 100proof the NAIC home inventory app?" |
+| home inventory checklist, household inventory list | "What does an adjuster need for a contents claim?" and the sample line |
+| inventory for insurance | "How do I prove what I owned for an insurance claim?" |
+
+What to measure: Search Console impressions and clicks per phrase, clicks on "Start your inventory" and "Request a connection" from `/information`, provider requests by source link, and whether roundups or assistants name 100proof. The next thing that would move all four is the 60-second walkthrough video embedded on the page.
 
 ### What we say about the work, and what we do not
 

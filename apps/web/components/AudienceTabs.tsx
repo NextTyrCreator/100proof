@@ -12,7 +12,9 @@ export function AudienceTabs() {
 
   function choose(next: Audience) {
     setAudience(next);
-    if (path !== "/") router.push("/");
+    const href = next === "provider" ? "/?for=providers" : "/";
+    if (path !== "/") router.push(href);
+    else window.history.replaceState(null, "", href);
   }
 
   return (

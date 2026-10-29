@@ -37,11 +37,26 @@ function clearPending() {
 }
 
 export function LoginGate({ email }: { email: string | null }) {
-  const { audience } = useAudience();
+  const { audience, setAudience } = useAudience();
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("for") === "providers") setAudience("provider");
+  }, [setAudience]);
+
   if (email) return <InventoryDocument />;
+
+  if (audience === "provider") {
+    return (
+      <div className="narrow login is-provider">
+        <AudienceSwitch />
+        <InsurerInquiry />
+      </div>
+    );
+  }
 
   return (
     <div className="narrow login" style={{ "--lead": LEAD.length } as React.CSSProperties}>
+      <AudienceSwitch />
       <h1>
         <span className="sr-only">Most people are underinsured. Don&apos;t be like them.</span>
         <span className="login-letters" aria-hidden="true">
@@ -70,8 +85,29 @@ export function LoginGate({ email }: { email: string | null }) {
               <span className="login-promise-time">verified proof</span>, and insure it properly.
             </span>
         </p>
-        {audience === "insured" ? <EmailLogin /> : <InsurerInquiry />}
+        <EmailLogin />
       </div>
+    </div>
+  );
+}
+
+/** On a phone the audience tabs live in the menu, so the choice is repeated on the page. */
+function AudienceSwitch() {
+  const { audience, setAudience } = useAudience();
+
+  function choose(next: "insured" | "provider") {
+    setAudience(next);
+    window.history.replaceState(null, "", next === "provider" ? "/?for=providers" : "/");
+  }
+
+  return (
+    <div className="audience-switch" role="group" aria-label="Who this is for">
+      <button type="button" aria-pressed={audience === "insured"} onClick={() => choose("insured")}>
+        For insured
+      </button>
+      <button type="button" aria-pressed={audience === "provider"} onClick={() => choose("provider")}>
+        For providers
+      </button>
     </div>
   );
 }
@@ -260,7 +296,8 @@ function EmailLogin() {
   return (
     <>
       {sent ? (
-        <form className="stack login-form" onSubmit={verifyCode}>
+        <form className="stack login-form login-cta-card login-code-card" onSubmit={verifyCode}>
+          <LoginSteps current={1} />
           <div className="code-status">
             <p className="code-sent">
               {notice === "resent" ? "New code sent to " : "Code sent to "}
@@ -279,21 +316,23 @@ function EmailLogin() {
           <p className="sr-only" aria-live="polite">
             {status}
           </p>
-          <label className="field">
-            <span>Code</span>
-            <input
-              ref={codeRef}
-              className="code-input"
-              name="code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              spellCheck={false}
-              maxLength={10}
-              value={code}
-              onChange={(event) => setCode(event.target.value)}
-              disabled={expired || pending === "send"}
-              required={!expired}
-            />
+          <label className="field login-code-field">
+            <span>6-digit code</span>
+            <span className="login-email-field">
+              <input
+                ref={codeRef}
+                className="code-input"
+                name="code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                spellCheck={false}
+                maxLength={10}
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                disabled={expired || pending === "send"}
+                required={!expired}
+              />
+            </span>
           </label>
           {expired ? (
             <button className="button" type="button" onClick={() => void sendCode()} disabled={pending !== null || resendWait > 0}>
@@ -301,8 +340,13 @@ function EmailLogin() {
             </button>
           ) : (
             <>
-              <button className="button" type="submit" disabled={pending !== null || code.trim().length === 0}>
-                {pending === "check" ? "Checking" : "Log in"}
+              <button className="button login-send" type="submit" disabled={pending !== null || code.trim().length === 0}>
+                <span>{pending === "check" ? "Checking" : "Log in"}</span>
+                {pending === "check" ? null : (
+                  <svg className="login-send-icon" viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M4 10h11M11 5l5 5-5 5" />
+                  </svg>
+                )}
               </button>
               <button
                 className="button quiet"
@@ -329,29 +373,83 @@ function EmailLogin() {
           </button>
         </form>
       ) : (
-        <form className="stack login-form" onSubmit={sendCode}>
+        <form className="stack login-form login-cta-card" onSubmit={sendCode}>
+          <LoginSteps current={0} />
           <label className="login-cue" htmlFor="login-email">
-            <span>Create your verifiable inventory now</span>
-            <svg className="login-cue-arrow" viewBox="0 0 36 40" aria-hidden="true">
-              <path d="M4 6c14-2 24 6 22 26" />
-              <path d="M19 26l7 8 6-9" />
+            <span className="login-cue-copy">
+              Enter your email to{" "}
+              <span className="login-cue-highlight">create your verifiable inventory now</span>
+            </span>
+            <svg className="login-cue-arrow" viewBox="0 0 112 76" aria-hidden="true">
+              <defs>
+                <linearGradient id="proof-cue-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="var(--proof-blue)" />
+                  <stop offset="52%" stopColor="var(--proof-cyan)" />
+                  <stop offset="100%" stopColor="var(--proof-teal)" />
+                </linearGradient>
+                <linearGradient id="proof-cue-glow" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="var(--proof-cyan)" stopOpacity="0" />
+                  <stop offset="55%" stopColor="var(--proof-cyan)" stopOpacity="0.45" />
+                  <stop offset="100%" stopColor="var(--proof-teal)" stopOpacity="0.85" />
+                </linearGradient>
+              </defs>
+              <path
+                className="login-cue-knockout"
+                pathLength={100}
+                d="M8 12 C 58 2, 102 18, 92 46 C 85 63, 56 66, 30 60"
+              />
+              <path
+                className="login-cue-knockout-head"
+                pathLength={100}
+                d="M44 49 L 25 60 L 45 70"
+              />
+              <path
+                className="login-cue-halo"
+                pathLength={100}
+                d="M8 12 C 58 2, 102 18, 92 46 C 85 63, 56 66, 30 60"
+              />
+              <path
+                className="login-cue-shaft"
+                pathLength={100}
+                d="M8 12 C 58 2, 102 18, 92 46 C 85 63, 56 66, 30 60"
+              />
+              <path
+                className="login-cue-pulse"
+                pathLength={100}
+                d="M8 12 C 58 2, 102 18, 92 46 C 85 63, 56 66, 30 60"
+              />
+              <path
+                className="login-cue-head"
+                pathLength={100}
+                d="M44 49 L 25 60 L 45 70"
+              />
+              <circle className="login-cue-target" cx="24" cy="60" r="4.5" />
             </svg>
           </label>
-          <label className="field">
-            <span>Email</span>
+          <div className="field login-email-field">
             <input
               id="login-email"
               name="email"
               type="email"
+              inputMode="email"
               autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="Enter your email address..."
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               required
             />
-          </label>
+          </div>
           <button className="button login-send" type="submit" disabled={pending !== null}>
-            {pending === "send" ? "Sending" : "Email me a code"}
+            <span>{pending === "send" ? "Sending" : "Begin"}</span>
+            {pending === "send" ? null : (
+              <svg className="login-send-icon" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M4 10h11M11 5l5 5-5 5" />
+              </svg>
+            )}
           </button>
+          <p className="hint login-next">Instant 6-digit code · No password · Free to start</p>
           {visibleError ? (
             <p className="form-error" role="alert">
               {visibleError}
@@ -360,6 +458,21 @@ function EmailLogin() {
         </form>
       )}
     </>
+  );
+}
+
+const STEPS = ["Email", "Code", "Scan"];
+
+function LoginSteps({ current }: { current: number }) {
+  return (
+    <ol className="login-steps" aria-label={`Step ${current + 1} of ${STEPS.length}`}>
+      {STEPS.map((step, index) => (
+        <li key={step} className={index === current ? "is-current" : index < current ? "is-done" : undefined}>
+          <span className="login-step-number">{index + 1}</span>
+          {step}
+        </li>
+      ))}
+    </ol>
   );
 }
 

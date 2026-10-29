@@ -44,6 +44,11 @@ export async function deleteUserFile(id: string) {
 
 export type SpokenTurn = { startMs: number; endMs: number; text: string };
 
+/** The service can return speaker markers such as `<|speaker_A|>` inside the text. */
+export function cleanTranscript(text: string) {
+  return text.replace(/<\|[^|>]{0,40}\|>/g, " ").replace(/\s+/g, " ").trim();
+}
+
 /** Mono 16-bit WAV at 16 or 24 kHz. Returns the turns with their times inside the clip. */
 export async function transcribeWav(audio: Blob, timeoutMs: number): Promise<{ transcript: string; turns: SpokenTurn[] }> {
   const { key, baseUrl } = config();
@@ -68,21 +73,25 @@ export async function transcribeWav(audio: Blob, timeoutMs: number): Promise<{ t
   };
   const turns: SpokenTurn[] = [];
   for (const turn of payload.turns ?? []) {
-    if (typeof turn.transcript !== "string" || !turn.transcript.trim()) continue;
+    if (typeof turn.transcript !== "string") continue;
+    const text = cleanTranscript(turn.transcript);
+    if (!text) continue;
     const startMs = typeof turn.startMs === "number" && Number.isFinite(turn.startMs) ? Math.max(0, turn.startMs) : 0;
     const endMs = typeof turn.endMs === "number" && Number.isFinite(turn.endMs) ? Math.max(startMs, turn.endMs) : startMs;
-    turns.push({ startMs, endMs, text: turn.transcript.trim() });
+    turns.push({ startMs, endMs, text });
   }
-  const transcript = typeof payload.transcript === "string" ? payload.transcript.trim() : turns.map((turn) => turn.text).join(" ");
+  const transcript =
+    typeof payload.transcript === "string" ? cleanTranscript(payload.transcript) : turns.map((turn) => turn.text).join(" ");
   return { transcript, turns };
 }
 
 export type MetaText = { text: string; status: string };
 
-export async function createResponse(body: Record<string, unknown>, timeoutMs: number): Promise<MetaText> {
+/** `attempts` is how many tries a 429 or 5xx gets. A call that must finish inside a page request uses 1. */
+export async function createResponse(body: Record<string, unknown>, timeoutMs: number, attempts = 2): Promise<MetaText> {
   const { key, baseUrl } = config();
   let lastStatus = 0;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const response = await fetch(`${baseUrl}/responses`, {
       method: "POST",
       headers: { ...authHeaders(key), "Content-Type": "application/json" },

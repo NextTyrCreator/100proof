@@ -7,7 +7,7 @@ import { useAudience, type Audience } from "./Audience";
 export function AudienceLink({ audience, className, children }: { audience: Audience; className?: string; children: React.ReactNode }) {
   const { setAudience } = useAudience();
   return (
-    <Link href="/" className={className} onClick={() => setAudience(audience)}>
+    <Link href={audience === "provider" ? "/?for=providers" : "/"} className={className} onClick={() => setAudience(audience)}>
       {children}
     </Link>
   );

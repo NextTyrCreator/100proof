@@ -4,7 +4,30 @@ All notable changes are documented here. Format: [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Added
+- Each clip's listing checks condition (new, good, fair, worn, damaged) and notes damage it can see with a severity and the second it is clearest. Damage lowers cash value (minor keeps 90%, moderate 70%, severe 40%, after wear); replacement stays the price of a new one. A later clip's worse damage is kept and the cash value recomputed. A photo or an answer can correct the condition.
+- When no brand is read or said, the listing may name a likely brand with its clues. It is shown as "Likely …, not confirmed", priced as a comparable, and cleared by a label or receipt brand.
+- The price batch checks each comparable against the line's kind, size, material, features, and brand. "Exact:" is downgraded to "Comparable:" unless the brand or model is confirmed.
+- The check at Done runs on every scan and also fixes categories, only to a listed category, logged as changed by the check.
+- New invariants (set 2): damage not reflected in cash value (blocker), damaged without a note, exact without a confirmed identity, likely brand marked settled, unknown category. The claim file is schema 2, with condition, damage, and likely brand per line; the CSV adds the same three columns.
+- Information explains condition and damage in the steps and the example line, and answers "How does 100proof handle damage or wear?" and "What if I do not know the brand?".
+
+### Fixed
+- "Undamaged" and "not new" are no longer read as damaged or new. A likely brand no longer marks the model as settled.
+- A category correction recomputes cash value on the new kind's useful life. Joining the same object keeps an age or worse damage from the other clip and recomputes cash value. The useful life stays on the line.
+- A grouped line under $100 does not take one piece's damage off the group price.
+
 ### Changed
+- For providers has its own screen: no arrow, its own headline, four points for claims and underwriting desks, and a short form (work email, company, name, lines of business, optional note). On a phone, a For insured / For providers switch sits above the headline, since the header tabs are in the menu there. `/?for=providers` opens the provider screen directly.
+- Information is rebuilt as a plain product page: the search phrase as the heading, one action, three steps, an example inventory line with its evidence, short sections for homeowners and for providers, the regulator facts as a list, questions as accordions, then terms and sources. The gradient cards, pills, and highlighted headings are gone. Two questions are added: whether 100proof is the NAIC app (it is not), and how it differs from other home inventory apps.
+- A scan is up to 10 minutes in 30-second clips; Scan more on a saved inventory adds up to 5. Two clips are reviewed at once and applied in order, a failed clip is retried three times before Retry shows, and pricing runs separately while the next clip is listed (ADR 0010).
+- Each clip's listing is told the rooms and lines already listed. At Done, a text-only repeat check joins the same object seen in different clips, under fixed rules: same category, never two lines from one clip, never two serials, the larger count, and a change-log entry.
+- A spoken price paid and a spoken year are kept: the price shows as "Price from you", and the year sets the age used for cash value. Each category has a default useful life.
+- Large and fixed items (furniture, appliances, hot tubs, grills, play sets) are priced from the video and marked Estimated from video, with Use this estimate. A label photo is asked for only when the likely models differ by more than 40% in price.
+- Receipt verified needs a receipt that lists the item. A typed or spoken price paid is its own signal and never the top mark (accuracy mark v2).
+- The inventory list folds by room and by line. Each line shows a picture (your photo, or a frame from its clip cut on the phone), its evidence, and its value; opened, it has more frames, Add photo, price paid, description, Add receipt, Talk about it, and the evidence record. Source video folds into one row.
+- The "Step 1" badge and its pulsing dot are replaced by a plain Email · Code · Scan row, and the code screen uses the same card, field, and button as the email screen. The labels on Information and For providers lose the pill and the dot.
+- Failed model calls are recorded in `cost_ledger` with `ok = false` and a reason code, so the measures show the real failure rate. Speaker tags are removed from transcripts.
 - Every page load opens on For insured with the email sign-in. "Which describes you?" is gone, and the choice is no longer kept in a cookie. The menu shows For insured, For providers, and Information.
 - The underinsurance pitch moved from the sign-in screen to Information.
 - "Email me a code" and the other gradient buttons no longer have a navy border, so they match the rest.
@@ -38,8 +61,19 @@ All notable changes are documented here. Format: [Keep a Changelog](https://keep
 - A sign-in code lasts 10 minutes. Asking again for the same email replaces that code once a minute, up to five times an hour. Five wrong codes pause sign-in for 15 minutes. Closing the tab still shows the code box.
 
 ### Added
+- Live scanner: while the camera records, corner marks and a sweep show the scan is active, and the main objects in view are named over the picture (Muse Spark 1.3, a small still at most every 4 seconds; display only, nothing stored). The line count updates as clips are listed.
+- Connections: choose receipts, invoices, order confirmations, or quotes (images or PDF) from the device, see which lines each one matches, and apply a match to mark the line Receipt verified. A file is kept only when applied. Email and assistant tools (MCP) are shown as planned.
+- Talk about it: a voice note of up to 30 seconds on any line, transcribed by Muse Voice Transcribe 1.0 and checked like a typed answer.
+- Harness checks for label requests, spoken ages, transcript tags, truncated listings, the 10- and 5-minute clocks, the clip queue, pricing, and the repeat-check rules (44 checks).
+- `docs/SCAN_PLAN.md` and ADR 0010. Migrations widen `cost_ledger` call types and let the `evidence` bucket hold PDFs; both applied to 100proof-dev.
+- An accuracy mark on every line: nine checkable evidence signals, shown as Needs evidence, Settled on camera, Strong without a receipt, or Receipt-confirmed — the receipt being the one mark that ties an item to its owner. The same marks are counted in Measures and written per line in the claim file. It is never shown as a percentage.
+- `docs/RESEARCH_LOOP.md`: how session corrections, skipped asks, receipt deltas, eval cases, and outside research become one gated change at a time.
+- A testing engine (`pnpm --filter @100proof/web harness`): deterministic checks over the accuracy mark, the evidence ranking, and the eval scorer, failing with exit 1. Every finished file is also run against invariant checks — contradictions are blockers, outliers are flagged — shown in Measures as "What to look at" and exported with the claim file.
+- The claim file now carries an audit block and the versioned standard that produced it (`lib/standard.ts`): format, schema, mark version, invariant set, and compliance register date.
+- `docs/COMPLIANCE_REGISTER.md` (valuation, claims-conduct, and privacy rules by jurisdiction, each with its primary source and check date), `docs/GOVERNANCE.md` (the auditability rules behind the file), `docs/EXPERIMENTS.md` (hypotheses written before levers change), and `docs/USER_TESTING.md` (who tests, on what tasks, after which gates, and how reports feed the loop).
+- The summary now states, in plain terms, what an active inventory supports if a covered loss happened today — and that payment itself depends on the policy. The Information page gains an auditability section and answers on what comes back and on relying on the file.
 - Information (`/information`), readable without signing in: how it works, what homeowners and renters get, why to inventory before a loss, what insurers, adjusters, and administrators get, the questions people search for with standalone answers, plain terms, and sources. Buttons open For insured or For providers. The page carries FAQ and app structured data from the same text, and is in the sitemap. Search and answer bots are allowed in `robots.txt`. Ranking rules, thresholds, the test method, and go-to-market numbers stay off the site and out of `llms.txt`.
-- On For insured, "Create your verifiable inventory now" sits above the email field with an arrow pointing to it.
+- On For insured, the sign-in card leads with a Step 1 badge, highlights "Enter your email to create your verifiable inventory now", and draws a curved gradient arrow with a traveling light pulse into the email field. The button says Begin.
 - Measures under View summary: filmed time, lines settled, still open and dollars in doubt, requests left for the reviewer, lines changed by each kind of evidence, hand edits, time from the first clip to the last change, and model calls with failures, median latency, and transcription cost. The claim file carries the same document measures. `GET /api/inventories/[id]/measures` reads the calls under RLS.
 - A live phone test checklist and results table in `docs/EVAL.md`.
 - The evidence loop (ADR 0009). Each line says whether its count and model are settled. While filming, a hint asks for the one thing worth the most: snap the label, step back for every chair, find the receipt, or answer a question. "Not now" and "Leave it" keep it from asking again.

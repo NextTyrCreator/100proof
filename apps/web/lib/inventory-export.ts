@@ -8,7 +8,9 @@ import {
   replacementTotal,
   type HomeInventory,
 } from "./inventory";
+import { accuracyMark } from "./accuracy-mark";
 import { documentMeasures } from "./inventory-measures";
+import { STANDARD } from "./standard";
 
 /**
  * The file a claims professional can import. Each line keeps what the camera showed, what the person said,
@@ -21,7 +23,7 @@ function inventoryJson(inventory: HomeInventory) {
 
   return {
     format: "100proof.inventory",
-    schemaVersion: 1,
+    schemaVersion: STANDARD.schemaVersion,
     exportedAt: new Date().toISOString(),
     savedVersion: Math.max(0, inventory.savedVersion),
     inventory: {
@@ -54,8 +56,18 @@ function inventoryJson(inventory: HomeInventory) {
         enteredBy: item.enteredBy,
         category: item.category,
         brand: item.brand,
+        likelyBrand: item.likelyBrand ? { name: item.likelyBrand.name, clues: item.likelyBrand.clues, confirmed: false } : null,
         markings: item.markings,
         serial: item.serial,
+        condition: item.condition,
+        damage: item.damage
+          ? {
+              note: item.damage.note,
+              severity: item.damage.severity,
+              clip: item.damage.clipId ? (clipNumber.get(item.damage.clipId) ?? null) : null,
+              atSeconds: item.damage.atSec,
+            }
+          : null,
         replacementUsdEach: item.priceUsd,
         cashValueUsdEach: item.cashValueUsd,
         depreciationNote: item.depreciationNote,
@@ -70,6 +82,19 @@ function inventoryJson(inventory: HomeInventory) {
           possibleModels: item.options,
           photo: Boolean(item.photoPath),
         },
+        accuracy: (() => {
+          const mark = accuracyMark(item);
+          return {
+            tier: mark.tier,
+            label: mark.label,
+            signalsMet: mark.met,
+            signalsTotal: mark.total,
+            present: mark.signals.filter((signal) => signal.met).map((signal) => signal.key),
+            missing: mark.signals.filter((signal) => !signal.met).map((signal) => signal.key),
+            receiptConfirmed: mark.receiptConfirmed,
+            next: mark.next,
+          };
+        })(),
         changes: item.changes.map((entry) => ({ at: entry.at, by: entry.source, before: entry.before, after: entry.after })),
         note: item.userNote,
       })),
@@ -87,6 +112,15 @@ function inventoryJson(inventory: HomeInventory) {
       cashValueUsd: cashValueTotal(inventory),
     },
     measures,
+    audit: {
+      standard: STANDARD,
+      generatedAt: new Date().toISOString(),
+      recordHash: inventory.recordHash,
+      provenance:
+        "Every line keeps camera sightings, owner statements, receipt values, valuation basis, and changes with their sources, kept apart. Open items are listed as exceptions, not hidden.",
+      reliance:
+        "Prepared for review. 100proof does not decide coverage or payment; the carrier does. Prices are estimates at the priced date.",
+    },
     workStatement: {
       status: "Hypothetical. Payments are off. This is not an invoice.",
       lines: measures.lines,

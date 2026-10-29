@@ -49,11 +49,11 @@ const steps = [
   },
   {
     title: "Record",
-    body: "Record up to 5 minutes, in 30-second clips. Pause and continue until you are done.",
+    body: "Record up to 10 minutes, in 30-second clips. Talk as you go: the room, the brand, the year, what you paid.",
   },
   {
     title: "Recognize",
-    body: "Rooms, quantities, and serials. You keep or correct each item.",
+    body: "Rooms, quantities, brands, and serials. Add a photo, a price paid, or a receipt to any line.",
   },
   {
     title: "Proof",
@@ -124,6 +124,11 @@ export function InventoryDocument() {
     selectInventory(inventoryId);
     const focus = itemIds.slice(0, 10).map(encodeURIComponent).join(",");
     router.push(`/scan?add=1&focus=${focus}`);
+  }
+
+  function scanMore(inventoryId: string) {
+    selectInventory(inventoryId);
+    router.push("/scan?add=1");
   }
 
   useEffect(() => {
@@ -209,6 +214,15 @@ export function InventoryDocument() {
         {opened.homeAddress.trim() ? <AddressLine address={opened.homeAddress.trim()} within={locationWithin(opened)} /> : null}
         {opened.recordHash ? <p className="record-hash">Record {opened.recordHash}</p> : null}
         {SAVE_LINES[saveState] ? <p className="hint">{SAVE_LINES[saveState]}</p> : null}
+        {clips.length > 0 ? (
+          <details className="clip-fold">
+            <summary>
+              <span>Source video</span>
+              <span className="room-meta">
+                {clips.length} {clips.length === 1 ? "clip" : "clips"} · {formatClock(clips.reduce((sum, clip) => sum + clip.durationMs, 0))}
+              </span>
+              <span className="fold-mark" aria-hidden="true" />
+            </summary>
         <ul className="rooms">
           {clips.map((clip, index) => {
             const open = openId === clip.id;
@@ -252,6 +266,11 @@ export function InventoryDocument() {
               </li>
             );
           })}
+        </ul>
+          </details>
+        ) : null}
+        {items.length > 0 ? (
+        <ul className="rooms">
           {items.map((item) => {
             const open = openId === item.id;
             return (
@@ -288,6 +307,7 @@ export function InventoryDocument() {
             );
           })}
         </ul>
+        ) : null}
         <ItemizedRooms
           inventoryId={opened.id}
           rooms={opened.rooms}
@@ -302,17 +322,11 @@ export function InventoryDocument() {
           onSkip={skipRequest}
           onSaveMedia={saveMedia}
           onFilmFocus={(itemIds) => filmFocus(opened.id, itemIds)}
+          onScanMore={() => scanMore(opened.id)}
         />
         <div className="sheet-actions">
-          <button
-            type="button"
-            className="button quiet"
-            onClick={() => {
-              selectInventory(opened.id);
-              router.push("/scan?add=1");
-            }}
-          >
-            Scan again
+          <button type="button" className="button quiet" onClick={() => scanMore(opened.id)}>
+            Scan more
           </button>
           <button type="button" className="button brand" aria-expanded={summaryOpen} onClick={() => setSummaryOpen((open) => !open)}>
             View summary
@@ -339,6 +353,12 @@ export function InventoryDocument() {
           <p className="summary-total">
             <span>Entered total</span>
             <span>{hasValue ? formatMoney(enteredTotal(items)) : "—"}</span>
+          </p>
+          <p className="total-note">
+            If a covered loss happened today, this record is what you could show your insurer: what you own, the
+            evidence behind each line, and what replacement would cost. What comes back depends on your policy —
+            its limit, deductible, and whether it pays replacement cost or cash value. Keeping this inventory
+            active and current is what keeps that number documented instead of guessed.
           </p>
           <div className="summary-actions">
             <a className="button quiet" href={mailHref(opened)}>

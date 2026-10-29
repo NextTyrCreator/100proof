@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 const MAX_ROWS = 2000;
 
 const rowSchema = z.object({
-  call: z.enum(["list", "price", "photo", "narration"]),
+  call: z.enum(["list", "price", "photo", "narration", "reconcile", "glance", "receipt", "voice"]),
   ok: z.boolean(),
   latency_ms: z.number().nonnegative(),
   bytes_in: z.number().nonnegative(),

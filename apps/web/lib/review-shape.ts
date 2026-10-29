@@ -2,13 +2,43 @@ import { z } from "zod";
 import {
   GROUP_UNDER_USD,
   HIGH_VALUE_OVER_USD,
+  type Condition,
+  type Damage,
+  type DamageSeverity,
   type ItemAsk,
+  type LikelyBrand,
   type RoomItem,
   type RoomShard,
   type SizeBand,
   type ValueOption,
   type Wearer,
 } from "./inventory";
+
+export const CATEGORIES = [
+  "clothing",
+  "shoes",
+  "books",
+  "food",
+  "linens",
+  "dishes",
+  "utensils",
+  "pantry",
+  "toiletries",
+  "cleaning",
+  "office",
+  "media",
+  "furniture",
+  "appliance",
+  "electronics",
+  "jewelry",
+  "watch",
+  "firearm",
+  "silverware",
+  "art",
+  "instrument",
+  "collectible",
+  "other",
+] as const;
 
 const ALWAYS_ROW = new Set([
   "jewelry",
@@ -55,8 +85,15 @@ const rawItemSchema = z.object({
   age: z.string().trim().max(40).nullable().optional(),
   ageYears: z.number().finite().nonnegative().max(100).nullable().optional(),
   condition: looseText(20),
+  damage: looseText(160),
+  damageSeverity: looseText(20),
+  damageAtSec: z.number().finite().nonnegative().max(600).nullable().optional().catch(null),
+  likelyBrand: looseText(80),
+  brandClues: looseText(200),
   usefulLifeYears: z.number().finite().positive().max(80).nullable().optional(),
   narration: z.string().trim().max(300).nullable().optional(),
+  pricePaidUsd: z.number().finite().nonnegative().max(1_000_000).nullable().optional().catch(null),
+  boughtYear: z.number().int().min(1900).max(2100).nullable().optional().catch(null),
   seenReplacementUsd: z.number().finite().nonnegative().max(1_000_000).nullable().optional(),
   seenAtSec: z.number().finite().nonnegative().max(600).nullable().optional(),
   saidAtSec: z.number().finite().nonnegative().max(600).nullable().optional(),
@@ -117,10 +154,24 @@ export const valueOptionSchema = z.object({
   highUsd: z.number().finite().nonnegative().max(1_000_000),
 });
 
+export const conditionSchema = z.enum(["new", "good", "fair", "worn", "damaged"]);
+
+export const damageSchema = z.object({
+  note: z.string().trim().min(1).max(160),
+  severity: z.enum(["minor", "moderate", "severe"]),
+  clipId: z.string().uuid().nullable(),
+  atSec: z.number().finite().nonnegative().max(600).nullable(),
+});
+
+const likelyBrandSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  clues: z.string().trim().min(1).max(200),
+});
+
 const itemChangeSchema = z.object({
   id: z.string().uuid(),
   at: z.string().min(1).max(40),
-  source: z.enum(["label photo", "receipt photo", "photo", "clip", "your answer", "your edit"]),
+  source: z.enum(["label photo", "receipt photo", "photo", "clip", "your answer", "your edit", "check"]),
   evidenceRef: z.string().max(300).nullable(),
   before: z.record(z.string().max(40), changeValueSchema),
   after: z.record(z.string().max(40), changeValueSchema),
@@ -137,12 +188,17 @@ export const reviewItemSchema = z.object({
   serial: z.string().max(80).nullable(),
   age: z.string().max(40).nullable(),
   ageYears: z.number().finite().nonnegative().max(100).nullable(),
+  /** The life the cash value was computed on. A category fix replaces it with that kind's life. */
+  usefulLifeYears: z.number().finite().positive().max(80).nullable().default(null),
   color: z.string().max(40).nullable(),
   size: z.string().max(40).nullable(),
   category: z.string().max(40).nullable(),
   itemType: z.string().max(80).nullable(),
   brand: z.string().max(80).nullable(),
   markings: z.string().max(160).nullable(),
+  likelyBrand: likelyBrandSchema.nullable().default(null),
+  condition: conditionSchema.nullable().default(null),
+  damage: damageSchema.nullable().default(null),
   wearer: wearerSchema,
   sizeBand: sizeBandSchema,
   grouped: z.boolean(),
@@ -210,9 +266,12 @@ type Draft = {
   serial: string | null;
   age: string | null;
   ageYears: number | null;
-  condition: string;
+  condition: Condition | null;
+  damage: Damage | null;
+  likelyBrand: LikelyBrand | null;
   usefulLifeYears: number | null;
   narration: string | null;
+  pricePaidUsd: number | null;
   seenReplacementUsd: number | null;
   roomTitle: string;
   seenAt: number[];
@@ -263,7 +322,7 @@ export function pricePlace(address: string, regionLabel: string): PricePlace {
   return { zip, jurisdiction };
 }
 
-function httpUrl(value: string | null) {
+export function httpUrl(value: string | null) {
   if (!value) return null;
   try {
     const url = new URL(value);
@@ -283,6 +342,76 @@ export function readModelJson(text: string): unknown {
   return JSON.parse(body.slice(start, end + 1)) as unknown;
 }
 
+/**
+ * A listing cut off at the output limit. Keep it up to the last item that closed, and close the arrays.
+ * Returns null when no complete item is there.
+ */
+export function salvageRoomsJson(text: string): unknown {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  const body = text.slice(start);
+  let tries = 0;
+  for (let end = body.lastIndexOf("}"); end > 0 && tries < 80; end = body.lastIndexOf("}", end - 1), tries += 1) {
+    for (const tail of ["]}]}", "}]}", "]}", ""]) {
+      try {
+        const value = JSON.parse(body.slice(0, end + 1) + tail) as { rooms?: { items?: unknown[] }[] };
+        if (Array.isArray(value.rooms) && value.rooms.some((room) => Array.isArray(room.items) && room.items.length > 0)) return value;
+      } catch {
+        // Try a shorter cut.
+      }
+    }
+  }
+  return null;
+}
+
+/** Years of age from what the listing or the person said. A year in the future, or before 1950, is ignored. */
+export function ageFromSpeech(
+  parts: { ageYears?: number | null; boughtYear?: number | null; age?: string | null; narration?: string | null },
+  now = new Date(),
+): number | null {
+  if (parts.ageYears != null) return parts.ageYears;
+  const thisYear = now.getUTCFullYear();
+  const fromYear = (year: number) => (year >= 1950 && year <= thisYear ? thisYear - year : null);
+  if (parts.boughtYear != null) {
+    const years = fromYear(parts.boughtYear);
+    if (years != null) return years;
+  }
+  for (const text of [parts.age, parts.narration]) {
+    if (!text) continue;
+    const bare = text.trim().match(/^(\d{1,2}(?:\.\d)?)$/);
+    if (bare && text === parts.age) return Number(bare[1]);
+    const old = text.match(/\b(\d{1,2}(?:\.\d)?)\s*(?:years?|yrs?)(?:\s+old)?\b/i);
+    if (old) return Number(old[1]);
+    const year = text.match(/(?<![$\d.,])\b(19[5-9]\d|20\d\d)\b(?![\d,])/);
+    if (year) {
+      const years = fromYear(Number(year[1]));
+      if (years != null) return years;
+    }
+  }
+  return null;
+}
+
+/** Used when the listing gave an age but no useful life. A carrier can use another schedule. */
+const USEFUL_LIFE: Record<string, number> = {
+  furniture: 10,
+  appliance: 10,
+  electronics: 5,
+  clothing: 3,
+  shoes: 2,
+  linens: 5,
+  dishes: 10,
+  utensils: 10,
+  office: 7,
+  media: 10,
+  instrument: 15,
+  other: 8,
+};
+
+/** Null for kinds that do not wear out on a schedule: jewelry, art, collectibles, silverware, watches, firearms. */
+export function lifeFor(category: string | null) {
+  return USEFUL_LIFE[normLabel(category ?? "") || "other"] ?? null;
+}
+
 function asWearer(value: string, category: string): Wearer | null {
   if (category !== "clothing" && category !== "shoes") return null;
   const text = value.toLowerCase();
@@ -300,23 +429,90 @@ function asSizeBand(value: string, category: string): SizeBand | null {
   return "unknown";
 }
 
-export function depreciate(replacement: number, ageYears: number | null, usefulLifeYears: number | null, condition: string | null) {
+export function asCondition(value: string | null | undefined): Condition | null {
+  const text = (value ?? "").trim().toLowerCase().replace(/[_-]+/g, " ");
+  if (!text) return null;
+  if ((/\b(no|not|without|zero)\b/.test(text) && text.includes("damage")) || text === "undamaged" || text === "intact") return "good";
+  if (text.includes("damage") || text.includes("broken")) return "damaged";
+  if (text === "poor" || text.includes("heavy")) return "worn";
+  if (/\bnew\b/.test(text) && !/\b(not|no|used)\b/.test(text)) return "new";
+  if (text === "good" || text === "excellent" || text === "very good") return "good";
+  if (text === "fair" || text.startsWith("fair ")) return "fair";
+  if (text === "worn" || text === "used") return "worn";
+  return null;
+}
+
+export function asSeverity(value: string | null | undefined): DamageSeverity {
+  const text = (value ?? "").trim().toLowerCase();
+  if (text.startsWith("sev") || text.includes("broken") || text.includes("unusable")) return "severe";
+  if (text.startsWith("mod")) return "moderate";
+  return "minor";
+}
+
+const SEVERITY_RANK: Record<DamageSeverity, number> = { minor: 1, moderate: 2, severe: 3 };
+
+/** The worse of two damage notes. Damage seen once stays on the line. */
+export function worseDamage(a: Damage | null, b: Damage | null) {
+  if (!a) return b;
+  if (!b) return a;
+  return SEVERITY_RANK[b.severity] > SEVERITY_RANK[a.severity] ? b : a;
+}
+
+const CONDITION_RANK: Record<Condition, number> = { new: 0, good: 1, fair: 2, worn: 3, damaged: 4 };
+
+export function worseCondition(a: Condition | null, b: Condition | null) {
+  if (!a) return b;
+  if (!b) return a;
+  return CONDITION_RANK[b] > CONDITION_RANK[a] ? b : a;
+}
+
+/** Share of the depreciated value left after damage. A carrier can use another schedule. */
+const DAMAGE_LEFT: Record<DamageSeverity, number> = { minor: 0.9, moderate: 0.7, severe: 0.4 };
+
+/**
+ * Cash value is replacement less physical depreciation: age against useful life, adjusted for condition,
+ * then any damage the camera showed. Replacement itself is never reduced, because it is the price of a new one.
+ */
+export function depreciate(
+  replacement: number,
+  ageYears: number | null,
+  usefulLifeYears: number | null,
+  condition: string | null,
+  damage: Pick<Damage, "severity"> | null = null,
+) {
+  const left = damage ? DAMAGE_LEFT[damage.severity] : 1;
+  const damageText = damage ? ` ${damage.severity[0]?.toUpperCase()}${damage.severity.slice(1)} damage on camera takes off ${Math.round((1 - left) * 100)}%.` : "";
   if (ageYears == null || usefulLifeYears == null || usefulLifeYears <= 0) {
+    if (!damage) {
+      return {
+        cash: replacement,
+        note: "No age was clear, so depreciation was not taken. The cash value matches replacement.",
+      };
+    }
     return {
-      cash: replacement,
-      note: "No age was clear, so depreciation was not taken. The cash value matches replacement.",
+      cash: Math.round(replacement * left * 100) / 100,
+      note: `Adjuster estimate. No age was clear, so only damage is deducted.${damageText} Cash value is ${Math.round(left * 100)}% of replacement. Replacement stays the price of a new one.`.slice(0, 300),
     };
   }
   let life = usefulLifeYears;
   const wear = (condition ?? "").toLowerCase();
   if (wear === "worn") life *= 0.8;
+  if (wear === "fair") life *= 0.9;
   if (wear === "new") life *= 1.1;
   const used = Math.min(1, Math.max(0, ageYears / life));
   const remain = Math.max(0.2, 1 - used);
+  const share = remain * left;
+  const floor = remain === 0.2 ? " Wear stops at 20% because the piece was still in use." : "";
   return {
-    cash: Math.round(replacement * remain * 100) / 100,
-    note: `Adjuster estimate. About ${ageYears} years into a ${Math.round(life)} year life, so cash value is ${Math.round(remain * 100)}% of replacement. The piece was still in the home, so the estimate stops at 20%. A carrier can use another schedule.`,
+    cash: Math.round(replacement * share * 100) / 100,
+    note: `Adjuster estimate. About ${ageYears} years into a ${Math.round(life)} year life leaves ${Math.round(remain * 100)}%.${damageText} Cash value is ${Math.round(share * 100)}% of replacement.${floor} A carrier can use another schedule.`.slice(0, 300),
   };
+}
+
+/** Cash value again after the condition or damage on a line changed. */
+export function revalue(item: Pick<RoomItem, "priceUsd" | "ageYears" | "category" | "condition" | "damage" | "usefulLifeYears">) {
+  if (item.priceUsd == null) return null;
+  return depreciate(item.priceUsd, item.ageYears, item.usefulLifeYears ?? lifeFor(item.category), item.condition, item.damage);
 }
 
 function shouldGroup(draft: Draft) {
@@ -367,7 +563,10 @@ function blankItem(
   pricedAt: string | null,
 ): RoomItem {
   const unit = priceUsd;
-  const worn = unit == null ? { cash: null, note: null } : depreciate(unit, draft.ageYears, draft.usefulLifeYears, draft.condition);
+  // A grouped line has no single damage note, so it is not priced as one damaged piece.
+  const lineDamage = grouped ? null : draft.damage;
+  const lineCondition = !lineDamage && draft.condition === "damaged" ? "worn" : draft.condition;
+  const worn = unit == null ? { cash: null, note: null } : depreciate(unit, draft.ageYears, draft.usefulLifeYears, lineCondition, lineDamage);
   return {
     id: crypto.randomUUID(),
     name: rowName(draft, grouped),
@@ -382,12 +581,16 @@ function blankItem(
     serial: grouped ? null : draft.serial,
     age: draft.age,
     ageYears: draft.ageYears,
+    usefulLifeYears: draft.usefulLifeYears,
     color: draft.color,
     size: draft.size,
     category: draft.category,
     itemType: draft.itemType,
     brand: draft.brand,
     markings: draft.markings,
+    likelyBrand: draft.brand ? null : draft.likelyBrand,
+    condition: lineCondition,
+    damage: lineDamage,
     wearer: draft.wearer,
     sizeBand: draft.sizeBand,
     grouped,
@@ -396,7 +599,7 @@ function blankItem(
     valueBasis,
     sourceUrl,
     userNote: "",
-    userValueUsd: null,
+    userValueUsd: draft.pricePaidUsd,
     photoUrl: null,
     photoPath: null,
     highValue: unit != null && unit > HIGH_VALUE_OVER_USD,
@@ -405,7 +608,7 @@ function blankItem(
       ? [{ text: draft.narration.slice(0, 300), clipId: null, atSec: draft.saidAtSec, heard }]
       : [],
     countSettled: draft.countSettled,
-    identitySettled: draft.identitySettled,
+    identitySettled: draft.likelyBrand && !draft.brand && !draft.markings ? false : draft.identitySettled,
     options: draft.identitySettled ? [] : draft.options.slice(0, 3),
     ask: draft.ask,
     skipped: [],
@@ -414,16 +617,29 @@ function blankItem(
   };
 }
 
+/** Damage needs a description; a damage note makes the condition damaged. */
+function seenCondition(item: { condition: string; damage: string; damageSeverity: string; damageAtSec?: number | null }) {
+  const note = clean(item.damage);
+  const damage: Damage | null = note ? { note, severity: asSeverity(item.damageSeverity), clipId: null, atSec: item.damageAtSec ?? null } : null;
+  return { condition: damage ? ("damaged" as const) : asCondition(item.condition), damage };
+}
+
+/** A likely maker is kept only with the clues behind it, and never when a brand was read or spoken. */
+function likelyMaker(brand: string, likely: string, clues: string): LikelyBrand | null {
+  if (knownMark(brand)) return null;
+  const name = knownMark(likely);
+  const why = clean(clues);
+  if (!name || !why) return null;
+  return { name: name.slice(0, 80), clues: why.slice(0, 200) };
+}
+
 function settledAsk(
   ask: { kind: ItemAsk["kind"]; prompt?: string | null } | null | undefined,
   countSettled: boolean,
   identitySettled: boolean,
 ): ItemAsk | null {
-  if (!ask) {
-    if (!identitySettled) return { kind: "label", prompt: "" };
-    if (!countSettled) return { kind: "wider", prompt: "" };
-    return null;
-  }
+  if (!ask) return !countSettled ? { kind: "wider", prompt: "" } : null;
+  if (ask.kind === "label" && identitySettled) return null;
   const prompt = ask.kind === "question" ? (ask.prompt ?? "").trim().slice(0, 160) : "";
   if (ask.kind === "question" && !prompt) return null;
   return { kind: ask.kind, prompt };
@@ -454,10 +670,12 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
         size: clean(item.size),
         serial: clean(item.serial),
         age: clean(item.age),
-        ageYears: item.ageYears ?? null,
-        condition: item.condition.trim(),
-        usefulLifeYears: item.usefulLifeYears ?? null,
+        ageYears: ageFromSpeech({ ageYears: item.ageYears, boughtYear: item.boughtYear, age: item.age, narration: item.narration }),
+        ...seenCondition(item),
+        likelyBrand: likelyMaker(item.brand, item.likelyBrand, item.brandClues),
+        usefulLifeYears: item.usefulLifeYears ?? lifeFor(category),
         narration: clean(item.narration),
+        pricePaidUsd: item.pricePaidUsd ?? null,
         seenReplacementUsd: item.seenReplacementUsd ?? null,
         roomTitle: room.title.trim(),
         seenAt: item.seenAtSec == null ? [] : [item.seenAtSec],
@@ -473,6 +691,7 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
           .slice(0, 3),
         ask: null,
       };
+      if (draft.likelyBrand && !draft.brand && !draft.markings) draft.identitySettled = false;
       draft.ask = settledAsk(item.ask, draft.countSettled, draft.identitySettled);
       if (draft.serial && draft.markings?.includes(draft.serial)) {
         draft.markings = knownMark(draft.markings.replaceAll(draft.serial, " "));
@@ -500,6 +719,11 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
       existing.identitySettled = existing.identitySettled && draft.identitySettled;
       if (existing.options.length === 0) existing.options = draft.options;
       existing.ask = existing.ask ?? draft.ask;
+      existing.pricePaidUsd = existing.pricePaidUsd ?? draft.pricePaidUsd;
+      existing.usefulLifeYears = existing.usefulLifeYears ?? draft.usefulLifeYears;
+      existing.condition = worseCondition(existing.condition, draft.condition);
+      existing.damage = worseDamage(existing.damage, draft.damage);
+      existing.likelyBrand = existing.likelyBrand ?? draft.likelyBrand;
       if (!existing.narration && draft.narration) {
         existing.narration = draft.narration;
         existing.saidAtSec = draft.saidAtSec;

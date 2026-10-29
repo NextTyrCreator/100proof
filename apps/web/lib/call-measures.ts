@@ -28,7 +28,7 @@ export type CallMeasures = {
 export const callMeasuresSchema = z.object({
   byCall: z.array(
     z.object({
-      call: z.enum(["list", "price", "photo", "narration"]),
+      call: z.enum(["list", "price", "photo", "narration", "reconcile", "glance", "receipt", "voice"]),
       calls: z.number().int().nonnegative(),
       failed: z.number().int().nonnegative(),
       medianLatencyMs: z.number().nonnegative(),
@@ -44,7 +44,7 @@ export const callMeasuresSchema = z.object({
   transcriptionUsd: z.number().nonnegative(),
 });
 
-const ORDER: CallKind[] = ["list", "narration", "price", "photo"];
+const ORDER: CallKind[] = ["list", "narration", "price", "reconcile", "glance", "photo", "voice", "receipt"];
 
 function median(values: number[]) {
   if (values.length === 0) return 0;
@@ -84,7 +84,7 @@ export function summarizeCalls(calls: (Pick<ModelCall, "call" | "ok" | "latencyM
       },
     ];
   });
-  const audioMinutes = (by.get("narration")?.audioMs ?? 0) / 60_000;
+  const audioMinutes = ((by.get("narration")?.audioMs ?? 0) + (by.get("voice")?.audioMs ?? 0)) / 60_000;
   return {
     byCall,
     calls: calls.length,

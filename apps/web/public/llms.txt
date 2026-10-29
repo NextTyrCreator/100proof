@@ -6,8 +6,11 @@ The public site is https://100proof.tech. The guide for homeowners, renters, ins
 
 ## For homeowners and renters
 
-- Five minutes on a phone: film each room, with no typing and nothing to install.
-- Each line gets brand, model, count, replacement cost new in the property's zip, and actual cash value after wear.
+- Up to ten minutes on a phone: film each room and talk as you go, with no typing and nothing to install.
+- Receipts, invoices, and quotes can be matched to lines from files on the device; a matched receipt marks the line Receipt verified.
+- Each line gets brand, model, count, condition, replacement cost new in the property's zip, and actual cash value after wear.
+- Damage the camera sees (a crack, a tear, a dent, a stain) is noted with the clip and second. It lowers actual cash value; replacement cost stays the price of a new one.
+- When no brand is read or said, a likely brand may be named from the clues in the video. It is marked not confirmed and priced as a comparable until a label photo or receipt confirms it.
 - It says what it could not see and asks for what would confirm it, instead of guessing.
 - The video stays with the account, every line shows where it came from, and the record is sealed with a fingerprint when it is created.
 - Download a CSV or a JSON claim file, email it, or send it. Film again at renewal.
@@ -17,9 +20,9 @@ The public site is https://100proof.tech. The guide for homeowners, renters, ins
 
 - Files arrive reviewable: each line keeps its sources apart (camera, what the policyholder said, receipt, comparable) with a change history.
 - Anything that could not be confirmed is flagged at the top of the file.
-- Valuation follows the adjuster method: replacement cost for like kind and quality at local prices, and actual cash value after physical depreciation. The exact product, or a labeled comparable.
+- Valuation follows the adjuster method: replacement cost for like kind and quality at local prices, and actual cash value after physical depreciation and any pre-loss damage seen on camera. The exact product only when brand and model are confirmed; otherwise a labeled comparable.
 - Contents documented at bind and renewal, before a loss.
-- Output as CSV and a versioned JSON claim file. Request a connection from the For providers tab on the home page.
+- Output as CSV and a versioned JSON claim file. Request a connection at https://100proof.tech/?for=providers.
 
 ## Models
 
@@ -32,7 +35,7 @@ Muse Spark 1.3 reviews the video, prices each line, and reads labels, receipts, 
 ## What 100proof is not
 
 - Not an insurance company, an adjuster, or a public adjuster. It does not interpret a policy, negotiate with an insurer, or decide coverage or payment. The insurer decides.
-- Not a program of the National Association of Insurance Commissioners, the Texas Department of Insurance, or any government. Those offices tell people to make a home inventory; 100proof is one way to do it.
+- Not the NAIC's home inventory app, and not a program of the National Association of Insurance Commissioners, the Texas Department of Insurance, or any government. Those offices tell people to make a home inventory; 100proof is one way to do it.
 - Not certified by Meta. It uses named Meta models.
 
 ## Facts with sources, checked 2026-10-29

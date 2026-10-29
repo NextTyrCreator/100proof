@@ -29,6 +29,10 @@ export async function sendEvidence(input: {
   body.set("priceUsd", item.priceUsd == null ? "" : String(item.priceUsd));
   body.set("options", JSON.stringify(item.options));
   body.set("question", item.ask?.kind === "question" ? item.ask.prompt : "");
+  body.set("category", item.category ?? "");
+  body.set("condition", JSON.stringify(item.condition));
+  body.set("damage", JSON.stringify(item.damage));
+  body.set("usefulLifeYears", item.usefulLifeYears == null ? "" : String(item.usefulLifeYears));
   body.set("address", input.address);
   body.set("region", input.region);
   body.set("inventoryId", input.inventoryId);

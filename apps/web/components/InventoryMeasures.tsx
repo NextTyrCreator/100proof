@@ -9,7 +9,11 @@ const CALL_LABELS: Record<CallMeasures["byCall"][number]["call"], string> = {
   list: "Clip reviews",
   narration: "Narration transcripts",
   price: "Pricing",
+  reconcile: "Repeat check",
+  glance: "Live scanner",
   photo: "Evidence checks",
+  voice: "Voice notes",
+  receipt: "Connected receipts",
 };
 
 function seconds(ms: number) {
@@ -58,10 +62,27 @@ export function InventoryMeasures({ inventory }: { inventory: HomeInventory }) {
     ],
     ["Left for the reviewer", String(measures.requestsLeftForReviewer)],
     [
+      "Accuracy marks",
+      `Receipt verified ${measures.accuracy.receipt} · Strong, no receipt ${measures.accuracy.strong} · Settled or estimated from video ${measures.accuracy.settled} · Needs evidence ${measures.accuracy.open}${measures.accuracy.entered ? ` · Entered by you ${measures.accuracy.entered}` : ""}`,
+    ],
+    [
+      "Strong without a receipt",
+      measures.accuracy.strongWithoutReceiptShare == null
+        ? "—"
+        : `${Math.round(measures.accuracy.strongWithoutReceiptShare * 100)}% of lines without a receipt`,
+    ],
+    ["Evidence signals per line", measures.accuracy.averageSignals == null ? "—" : `${measures.accuracy.averageSignals} of 9 on average`],
+    [
+      "File checks",
+      measures.checks.blockers + measures.checks.review + measures.checks.notes === 0
+        ? "No contradictions or outliers"
+        : `${measures.checks.blockers} to fix, ${measures.checks.review} to review, ${measures.checks.notes} notes`,
+    ],
+    [
       "Changed by evidence",
       `${measures.linesChangedByEvidence} ${measures.linesChangedByEvidence === 1 ? "line" : "lines"} · label ${fromEvidence["label photo"]}, receipt ${fromEvidence["receipt photo"]}, photo ${fromEvidence.photo}, clip ${fromEvidence.clip}, answer ${fromEvidence["your answer"]}`,
     ],
-    ["Your edits", String(fromEvidence["your edit"])],
+    ["Your edits", `${fromEvidence["your edit"]} by you · ${fromEvidence.check} by the end-of-scan check`],
     ["First clip to last change", measures.minutesToFile == null ? "—" : `${measures.minutesToFile} min`],
   ];
 
@@ -76,6 +97,16 @@ export function InventoryMeasures({ inventory }: { inventory: HomeInventory }) {
           </div>
         ))}
       </dl>
+      {measures.checks.issues.length > 0 ? (
+        <>
+          <p className="measures-head">What to look at</p>
+          <ul className="measures-issues">
+            {measures.checks.issues.slice(0, 5).map((issue) => (
+              <li key={`${issue.code}-${issue.itemId ?? "file"}`}>{issue.message}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
       <p className="measures-head">Model calls</p>
       {!saved ? (
         <p className="hint">Shown once this inventory is saved to your account.</p>

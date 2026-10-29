@@ -101,7 +101,7 @@ function blankInventory(id: string, number: number): HomeInventory {
 function eventKind(source: ChangeSource): ItemEvent["kind"] {
   if (source === "clip") return "clip";
   if (source === "your answer") return "answer";
-  if (source === "your edit") return "edit";
+  if (source === "your edit" || source === "check") return "edit";
   return "photo";
 }
 

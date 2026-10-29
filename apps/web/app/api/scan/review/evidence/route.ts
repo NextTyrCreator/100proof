@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { recordCalls, uuidSchema } from "../../../../../lib/account";
-import { pricePlace, valueOptionSchema } from "../../../../../lib/review-shape";
+import { conditionSchema, damageSchema, pricePlace, valueOptionSchema } from "../../../../../lib/review-shape";
 import { reviewEvidence } from "../../../../../lib/review-scan";
 import { createServerSupabase } from "../../../../../lib/supabase/server";
 
@@ -25,7 +25,19 @@ const detailSchema = z.object({
   priceUsd: z.number().finite().nonnegative().max(1_000_000).nullable(),
   options: z.array(valueOptionSchema).max(3),
   question: z.string().trim().max(160),
+  category: z.string().trim().max(40),
+  condition: conditionSchema.nullable(),
+  damage: damageSchema.nullable(),
+  usefulLifeYears: z.number().finite().positive().max(80).nullable(),
 });
+
+function json(form: FormData, key: string): unknown {
+  try {
+    return JSON.parse(text(form, key) || "null");
+  } catch {
+    return null;
+  }
+}
 
 function text(form: FormData, key: string) {
   const value = form.get(key);
@@ -89,6 +101,10 @@ export async function POST(request: Request) {
     priceUsd: priceText ? Number(priceText) : null,
     options,
     question: text(form, "question"),
+    category: text(form, "category"),
+    condition: json(form, "condition"),
+    damage: json(form, "damage"),
+    usefulLifeYears: text(form, "usefulLifeYears") ? Number(text(form, "usefulLifeYears")) : null,
   });
   if (!detail.success) return NextResponse.json({ error: "This item could not be checked." }, { status: 400 });
 
@@ -108,6 +124,7 @@ export async function POST(request: Request) {
         brand: detail.data.brand || null,
         markings: detail.data.markings || null,
         serial: detail.data.serial || null,
+        category: detail.data.category || null,
       },
       place,
     );
