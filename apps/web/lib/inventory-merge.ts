@@ -110,12 +110,27 @@ function addSightings(match: RoomItem, item: RoomItem) {
   match.said = [...match.said, ...item.said.filter((fact) => !known.has(fact.text.toLowerCase()))].slice(-20);
 }
 
-/** Damage or a worse condition seen in a later clip stays on the line and lowers its cash value. */
+/** Damage, a worse condition, or an age heard later stays on the line and lowers its cash value. */
 function adoptCondition(match: RoomItem, item: RoomItem) {
   const damage = worseDamage(match.damage, item.damage);
   const condition = worseCondition(match.condition, item.condition);
-  if (!match.brand && !match.likelyBrand && item.likelyBrand) match.likelyBrand = item.likelyBrand;
-  if (damage === match.damage && condition === match.condition) return;
+  if (!match.brand && !match.likelyBrand && item.likelyBrand) {
+    match.likelyBrand = item.likelyBrand;
+    if (!match.markings) match.identitySettled = false;
+  }
+  let heardMore = false;
+  if (match.ageYears == null && item.ageYears != null) {
+    match.ageYears = item.ageYears;
+    match.age = item.age ?? match.age;
+    heardMore = true;
+  }
+  if (match.usefulLifeYears == null && item.usefulLifeYears != null) {
+    match.usefulLifeYears = item.usefulLifeYears;
+    heardMore = true;
+  }
+  if (match.userValueUsd == null && item.userValueUsd != null) match.userValueUsd = item.userValueUsd;
+  if (!match.narration && item.narration) match.narration = item.narration;
+  if (damage === match.damage && condition === match.condition && !heardMore) return;
   match.damage = damage;
   match.condition = condition;
   const worn = revalue(match);
@@ -131,14 +146,22 @@ function adoptIdentity(match: RoomItem, item: RoomItem) {
   match.markings = item.markings ?? match.markings;
   match.serial = item.serial ?? match.serial;
   match.options = [];
+  if (match.brand) match.likelyBrand = null;
   if (item.priceUsd != null) {
     match.priceUsd = item.priceUsd;
-    match.cashValueUsd = item.cashValueUsd;
-    match.depreciationNote = item.depreciationNote;
     match.valueBasis = item.valueBasis;
     match.sourceUrl = item.sourceUrl;
     match.pricedAt = item.pricedAt;
     match.highValue = item.priceUsd > HIGH_VALUE_OVER_USD;
+  }
+  if (match.usefulLifeYears == null && item.usefulLifeYears != null) match.usefulLifeYears = item.usefulLifeYears;
+  const worn = revalue(match);
+  if (worn) {
+    match.cashValueUsd = worn.cash;
+    match.depreciationNote = worn.note;
+  } else if (item.priceUsd != null) {
+    match.cashValueUsd = item.cashValueUsd;
+    match.depreciationNote = item.depreciationNote;
   }
   if (match.ask?.kind === "label") match.ask = null;
 }
@@ -207,9 +230,7 @@ export function mergeRooms(
       if (!match.identitySettled && item.identitySettled) adoptIdentity(match, item);
       if (!match.grouped) adoptCondition(match, item);
       const settled = change(before, match, "clip", item.sightings[0]?.clipId ?? null);
-      if (settled && ("countSettled" in settled.after || "identitySettled" in settled.after || "damage" in settled.after)) {
-        match.changes = [...match.changes, settled].slice(-40);
-      }
+      if (settled) match.changes = [...match.changes, settled].slice(-40);
     }
   }
   return rooms;

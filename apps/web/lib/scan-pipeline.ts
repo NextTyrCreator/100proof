@@ -71,11 +71,13 @@ export function linesToPrice(review: ReviewResult, alreadySent: Set<string>) {
 }
 
 function cashFor(item: RoomItem, replacement: number) {
-  if (item.priceUsd != null && item.priceUsd > 0 && item.cashValueUsd != null && item.depreciationNote) {
+  const life = item.usefulLifeYears ?? lifeFor(item.category);
+  // A line with damage is depreciated again, so a full-price share cannot hide the damage.
+  if (item.priceUsd != null && item.priceUsd > 0 && item.cashValueUsd != null && item.depreciationNote && !item.damage) {
     const share = Math.min(1, Math.max(0, item.cashValueUsd / item.priceUsd));
     return { cash: Math.round(replacement * share * 100) / 100, note: item.depreciationNote };
   }
-  return depreciate(replacement, item.ageYears, lifeFor(item.category), item.condition, item.damage);
+  return depreciate(replacement, item.ageYears, life, item.condition, item.damage);
 }
 
 /** "Exact" means the brand and model on the line were read or stated. Anything else is a comparable. */

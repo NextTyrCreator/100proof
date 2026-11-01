@@ -90,7 +90,7 @@ const rawItemSchema = z.object({
   damageAtSec: z.number().finite().nonnegative().max(600).nullable().optional().catch(null),
   likelyBrand: looseText(80),
   brandClues: looseText(200),
-  usefulLifeYears: z.number().finite().positive().max(80).nullable().optional(),
+  usefulLifeYears: z.number().finite().positive().max(80).nullable().optional().catch(null),
   narration: z.string().trim().max(300).nullable().optional(),
   pricePaidUsd: z.number().finite().nonnegative().max(1_000_000).nullable().optional().catch(null),
   boughtYear: z.number().int().min(1900).max(2100).nullable().optional().catch(null),
@@ -109,7 +109,8 @@ const rawItemSchema = z.object({
     )
     .max(6)
     .nullable()
-    .optional(),
+    .optional()
+    .catch([]),
   ask: z
     .object({
       kind: z.enum(["label", "wider", "receipt", "question"]),
@@ -369,7 +370,8 @@ export function ageFromSpeech(
   parts: { ageYears?: number | null; boughtYear?: number | null; age?: string | null; narration?: string | null },
   now = new Date(),
 ): number | null {
-  if (parts.ageYears != null) return parts.ageYears;
+  // A copied template sends 0. A real age, or a year they said, has to win over that 0.
+  if (parts.ageYears != null && parts.ageYears > 0) return parts.ageYears;
   const thisYear = now.getUTCFullYear();
   const fromYear = (year: number) => (year >= 1950 && year <= thisYear ? thisYear - year : null);
   if (parts.boughtYear != null) {
@@ -388,6 +390,7 @@ export function ageFromSpeech(
       if (years != null) return years;
     }
   }
+  if (parts.ageYears === 0) return 0;
   return null;
 }
 
@@ -565,7 +568,7 @@ function blankItem(
   const unit = priceUsd;
   // A grouped line has no single damage note, so it is not priced as one damaged piece.
   const lineDamage = grouped ? null : draft.damage;
-  const lineCondition = !lineDamage && draft.condition === "damaged" ? "worn" : draft.condition;
+  const lineCondition = grouped && !lineDamage && draft.condition === "damaged" ? "worn" : draft.condition;
   const worn = unit == null ? { cash: null, note: null } : depreciate(unit, draft.ageYears, draft.usefulLifeYears, lineCondition, lineDamage);
   return {
     id: crypto.randomUUID(),
@@ -617,10 +620,16 @@ function blankItem(
   };
 }
 
+/** Words a model copies when it did not see damage. They are not a damage note. */
+function placeholderDamage(value: string) {
+  return /^(none|n\/a|na|no|nil|unknown|no damage|undamaged|not damaged|no visible damage|none visible|no issues)$/.test(value.trim().toLowerCase());
+}
+
 /** Damage needs a description; a damage note makes the condition damaged. */
 function seenCondition(item: { condition: string; damage: string; damageSeverity: string; damageAtSec?: number | null }) {
   const note = clean(item.damage);
-  const damage: Damage | null = note ? { note, severity: asSeverity(item.damageSeverity), clipId: null, atSec: item.damageAtSec ?? null } : null;
+  const damage: Damage | null =
+    note && !placeholderDamage(note) ? { note, severity: asSeverity(item.damageSeverity), clipId: null, atSec: item.damageAtSec ?? null } : null;
   return { condition: damage ? ("damaged" as const) : asCondition(item.condition), damage };
 }
 
@@ -675,8 +684,8 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
         likelyBrand: likelyMaker(item.brand, item.likelyBrand, item.brandClues),
         usefulLifeYears: item.usefulLifeYears ?? lifeFor(category),
         narration: clean(item.narration),
-        pricePaidUsd: item.pricePaidUsd ?? null,
-        seenReplacementUsd: item.seenReplacementUsd ?? null,
+        pricePaidUsd: item.pricePaidUsd != null && item.pricePaidUsd > 0 ? item.pricePaidUsd : null,
+        seenReplacementUsd: item.seenReplacementUsd != null && item.seenReplacementUsd > 0 ? item.seenReplacementUsd : null,
         roomTitle: room.title.trim(),
         seenAt: item.seenAtSec == null ? [] : [item.seenAtSec],
         saidAtSec: item.saidAtSec ?? null,

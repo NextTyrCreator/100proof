@@ -143,6 +143,8 @@ A line under $100 that is grouped with others does not keep one piece's damage n
 
 A likely brand never marks the model as settled. "Undamaged" and "not new" are not read as damaged or new. When the same object is joined, an age or a worse condition from the other clip recomputes the cash value. The useful life used for that cash value is kept on the line, so a later damage note does not switch the schedule.
 
+A copied template zero is not a price, a price paid, or a useful life, and it does not hide a year the person said. "None" in the damage field is not damage. A later clip of the same object applies a year it heard while filming. Settling the brand recomputes cash value from the damage already on the line.
+
 **Invariants (set version 2).**
 
 | Check | Level | Raised when |

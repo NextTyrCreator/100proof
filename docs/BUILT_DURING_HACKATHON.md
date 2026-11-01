@@ -32,6 +32,7 @@ Judges: this table is the index of original contributions. Each row links to the
 | 2026-10-29 | Live scanner over the camera; foldable inventory list with clip frames, price paid, receipts, and voice notes; Connections (files); quieter sign-in steps | scan v2 | Muse Spark 1.3, Muse Voice Transcribe 1.0 | Cursor (Claude Opus 5.5) | PDF receipts untested against the API |
 | 2026-10-29 | Provider screen without the arrow, phone audience switch, `/?for=providers` link; Information rebuilt as a plain product page with an example line and two new questions | information | — | Cursor (Claude Opus 5.5) | `docs/GTM.md` Information page review |
 | 2026-10-29 | Condition and damage per clip, priced into cash value only; likely brand from clues, never settling identity; price match check and "Exact" guard; category fixes at Done; claim file schema 2, invariant set 2 | scan v2 | Muse Spark 1.3 | Cursor (Claude Opus 5.5) | `docs/SCAN_PLAN.md` 2.9; harness checks passing |
+| 2026-10-31 | Listing survives a template 0 and a placeholder "none"; a later clip's year and a settled brand keep damage in the cash value | scan v2 | — | Cursor (Grok 4.7) | Harness checks for age, damage, and useful life |
 
 ## Not built during the hackathon (for clarity)
 - Pre-event planning: `ARCHITECTURE.md` (written Oct 26 before kickoff). No code.

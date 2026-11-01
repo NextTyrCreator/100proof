@@ -171,6 +171,7 @@ function receiptChange(paid: number): ItemChange {
   check("age: '5 years old' becomes an age", ageFromSpeech({ age: "5 years old" }, now) === 5);
   check("age: a year in the narration counts", ageFromSpeech({ narration: "We got this hot tub in 2021" }, now) === 5);
   check("age: a stated age wins over a year", ageFromSpeech({ ageYears: 2, boughtYear: 2010 }, now) === 2);
+  check("age: a template 0 does not hide the year they said", ageFromSpeech({ ageYears: 0, boughtYear: 2021 }, now) === 5);
   check("age: a future year is ignored", ageFromSpeech({ boughtYear: 2031 }, now) === null);
 }
 
@@ -362,6 +363,108 @@ function receiptChange(paid: number): ItemChange {
   });
   const joinedSofa = applyReconcile({ rooms: room([pricedSofa, agedSofa]) }, { same: [["sofa", "sofa-2"]], rooms: [], fix: [] }).review.rooms[0]?.items[0];
   check("damage: an age from the other clip lowers cash value", joinedSofa?.ageYears === 5 && joinedSofa.cashValueUsd === 500, `${joinedSofa?.cashValueUsd}`);
+
+  const placeholder = shapeWalkthrough(
+    { rooms: [{ title: "Kitchen", items: [{ name: "Toaster", category: "appliance", condition: "good", damage: "none", damageSeverity: "minor", usefulLifeYears: 0, pricePaidUsd: 0, seenReplacementUsd: 0, ageYears: 0, boughtYear: 2021, options: [{ label: "", lowUsd: 0, highUsd: 0 }] }] }] },
+    [],
+    [],
+  ).rooms.flatMap((entry) => entry.items)[0];
+  check(
+    "listing: a template zero and a placeholder none do not drop or misprice the line",
+    placeholder != null && placeholder.damage == null && placeholder.condition === "good" && placeholder.userValueUsd == null && placeholder.priceUsd == null && placeholder.ageYears === 5,
+    `${placeholder?.ageYears} ${placeholder?.priceUsd} ${placeholder?.damage?.note}`,
+  );
+
+  const heardLater = item({
+    id: "lamp",
+    name: "Lamp",
+    brand: null,
+    markings: null,
+    itemType: "lamp",
+    category: "other",
+    ageYears: null,
+    usefulLifeYears: 8,
+    condition: "good",
+    damage: null,
+    priceUsd: 200,
+    cashValueUsd: 200,
+    depreciationNote: "No age was clear, so depreciation was not taken. The cash value matches replacement.",
+    valueBasis: "Comparable: lamp",
+    said: [],
+  });
+  const withYear = item({
+    id: "lamp-2",
+    name: "Lamp",
+    brand: null,
+    markings: null,
+    itemType: "lamp",
+    category: "other",
+    ageYears: 4,
+    usefulLifeYears: 8,
+    condition: "good",
+    damage: null,
+    priceUsd: null,
+    cashValueUsd: null,
+    valueBasis: null,
+    said: [],
+    sightings: [{ clipId: "c9", atSec: 2 }],
+  });
+  const lamp = mergeRooms(room([heardLater]), room([withYear]), "continue")[0]?.items[0];
+  check("age: a year heard in a later clip lowers cash while filming", lamp?.ageYears === 4 && lamp.cashValueUsd === 100 && lamp.changes.some((entry) => entry.after.ageYears === 4), `${lamp?.cashValueUsd}`);
+
+  const torn = item({
+    id: "sofa",
+    name: "Sofa",
+    brand: null,
+    markings: null,
+    itemType: "sofa",
+    identitySettled: false,
+    category: "furniture",
+    ageYears: 5,
+    usefulLifeYears: 10,
+    condition: "damaged",
+    damage: { note: "torn arm", severity: "moderate", clipId: null, atSec: 2 },
+    priceUsd: 1000,
+    cashValueUsd: 350,
+    depreciationNote: "damage already taken",
+    valueBasis: "Comparable: sofa",
+    said: [],
+  });
+  const named = item({
+    id: "sofa-new",
+    name: "Sofa",
+    brand: "Ashley",
+    markings: null,
+    itemType: "sofa",
+    identitySettled: true,
+    category: "furniture",
+    ageYears: null,
+    condition: "good",
+    damage: null,
+    priceUsd: 2000,
+    cashValueUsd: 2000,
+    depreciationNote: "No age was clear, so depreciation was not taken. The cash value matches replacement.",
+    valueBasis: "Exact: Ashley sofa",
+    said: [],
+  });
+  const settled = mergeRooms(room([torn]), room([named]), "focus", ["sofa"])[0]?.items[0];
+  check("damage: settling the brand keeps the damage off the new price", settled?.brand === "Ashley" && settled.priceUsd === 2000 && settled.cashValueUsd === 700, `${settled?.cashValueUsd}`);
+
+  const longLife = item({
+    id: "table",
+    name: "Table",
+    category: "furniture",
+    ageYears: 10,
+    usefulLifeYears: 20,
+    condition: "good",
+    damage: null,
+    priceUsd: null,
+    cashValueUsd: null,
+    depreciationNote: null,
+    valueBasis: null,
+  });
+  const longPriced = applyPrices({ rooms: room([longLife]) }, [{ key: "table", replacementUsd: 1000, basis: "Comparable: table", sourceUrl: null }], new Map([["table", ["table"]]])).rooms[0]?.items[0];
+  check("prices: the line's own useful life is used", longPriced?.cashValueUsd === 500, `${longPriced?.cashValueUsd}`);
 }
 
 // Categories: the check at Done may fix a category, only to a listed one, and logs it.
