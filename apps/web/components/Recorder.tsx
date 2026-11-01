@@ -24,7 +24,7 @@ import {
   type CloseReason,
   type SessionClock,
 } from "../lib/scan-session";
-import { applyPrices, applyReconcile, knownSoFar, linesToPrice, reconcileInput } from "../lib/scan-pipeline";
+import { applyPrices, applyReconcile, knownSoFar, linesToPrice, reconcileInput, shareKnownPrices } from "../lib/scan-pipeline";
 import type { LineToPrice } from "../lib/review-scan";
 import { reviewResultSchema, type PricedLine, type ReviewResult } from "../lib/review-shape";
 import { spokenLineSchema } from "../lib/inventory-record";
@@ -297,6 +297,7 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
   function schedulePricing() {
     const pricing = pricingRef.current;
     if (pricing.running || !combinedRef.current) return;
+    combinedRef.current = shareKnownPrices(combinedRef.current);
     const { lines, idsByKey, descriptions } = linesToPrice(combinedRef.current, pricing.sent);
     if (lines.length === 0) return;
     for (const description of descriptions) pricing.sent.add(description);
@@ -388,6 +389,7 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
           if (answer && combinedRef.current) combinedRef.current = applyReconcile(combinedRef.current, answer).review;
         }
         if (combinedRef.current) {
+          combinedRef.current = shareKnownPrices(combinedRef.current);
           const { lines, idsByKey, descriptions } = linesToPrice(combinedRef.current, pricingRef.current.sent);
           if (lines.length > 0) {
             showProgress("Checking local prices");

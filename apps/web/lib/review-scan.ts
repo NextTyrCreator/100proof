@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Condition, Damage } from "./inventory";
 import {
   asCondition,
+  isBlankFact,
   asSeverity,
   CATEGORIES,
   depreciate,
@@ -564,8 +565,7 @@ export async function readConnectedDocument(
 
 function readableMark(value: string | null | undefined) {
   const text = value?.trim() ?? "";
-  if (!text) return null;
-  if (["unknown", "n/a", "na", "none", "unbranded", "generic", "no brand", "not visible"].includes(text.toLowerCase())) return null;
+  if (isBlankFact(text)) return null;
   return text;
 }
 

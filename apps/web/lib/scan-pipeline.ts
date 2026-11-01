@@ -28,6 +28,49 @@ function withoutSerial(text: string, serial: string | null) {
   return serial ? text.replaceAll(serial, " ").replace(/\s+/g, " ").trim() : text;
 }
 
+function priceGroupKey(item: RoomItem) {
+  const described = [item.itemType, item.brand, item.markings].filter(Boolean).join(" ");
+  return priceKey({ name: item.name, description: described || item.detail, color: item.color, size: item.size });
+}
+
+/**
+ * A line listed again after its description was already priced never gets its own search.
+ * It inherits the checked price, then its own age and damage set the cash value.
+ */
+export function shareKnownPrices(review: ReviewResult): ReviewResult {
+  const donors = new Map<string, RoomItem>();
+  for (const room of review.rooms) {
+    for (const item of room.items) {
+      if (item.enteredBy !== "scan" || item.pricedAt == null || item.priceUsd == null) continue;
+      const key = priceGroupKey(item);
+      if (!donors.has(key)) donors.set(key, item);
+    }
+  }
+  if (donors.size === 0) return review;
+  let changed = false;
+  const rooms = review.rooms.map((room) => ({
+    ...room,
+    items: room.items.map((item) => {
+      if (item.enteredBy !== "scan" || item.pricedAt != null) return item;
+      const donor = donors.get(priceGroupKey(item));
+      if (!donor || donor.id === item.id || donor.priceUsd == null) return item;
+      changed = true;
+      const worn = cashFor(item, donor.priceUsd);
+      return {
+        ...item,
+        priceUsd: donor.priceUsd,
+        cashValueUsd: worn.cash,
+        depreciationNote: worn.note,
+        valueBasis: donor.valueBasis ? checkedBasis(item, donor.valueBasis) : item.valueBasis,
+        sourceUrl: donor.sourceUrl,
+        pricedAt: donor.pricedAt,
+        highValue: donor.priceUsd > HIGH_VALUE_OVER_USD,
+      };
+    }),
+  }));
+  return changed ? { rooms } : review;
+}
+
 /**
  * Lines that still need a web price, one per description. The key sent is the first line's id;
  * `idsByKey` maps it back to every line with the same description. A serial is never sent.
@@ -37,8 +80,7 @@ export function linesToPrice(review: ReviewResult, alreadySent: Set<string>) {
   for (const room of review.rooms) {
     for (const item of room.items) {
       if (item.enteredBy !== "scan" || item.pricedAt != null) continue;
-      const described = [item.itemType, item.brand, item.markings].filter(Boolean).join(" ");
-      const key = priceKey({ name: item.name, description: described || item.detail, color: item.color, size: item.size });
+      const key = priceGroupKey(item);
       if (alreadySent.has(key)) continue;
       const list = groups.get(key) ?? [];
       list.push(item);
@@ -187,11 +229,13 @@ function joinInto(keeper: RoomItem, other: RoomItem): RoomItem {
     before: { sameObjectAs: other.name.slice(0, 400), count: keeper.count },
     after: { sameObjectAs: keeper.name.slice(0, 400), count },
   };
-  const priceUsd = keeper.priceUsd ?? other.priceUsd;
   const damage = worseDamage(keeper.damage, other.damage);
   const condition = worseCondition(keeper.condition, other.condition);
   const ageYears = keeper.ageYears ?? other.ageYears;
   const usefulLifeYears = keeper.usefulLifeYears ?? other.usefulLifeYears;
+  const webChecked = (line: RoomItem) => line.pricedAt != null && line.priceUsd != null;
+  const priceFrom = webChecked(keeper) ? keeper : webChecked(other) ? other : keeper.priceUsd != null ? keeper : other;
+  const priceUsd = priceFrom.priceUsd;
   const joined: RoomItem = {
     ...keeper,
     damage,
@@ -211,11 +255,11 @@ function joinInto(keeper: RoomItem, other: RoomItem): RoomItem {
     photoPath: keeper.photoPath ?? other.photoPath,
     userNote: [keeper.userNote, other.userNote].filter(Boolean).join(" ").slice(0, 500),
     priceUsd,
-    cashValueUsd: keeper.priceUsd != null ? keeper.cashValueUsd : other.cashValueUsd,
-    depreciationNote: keeper.priceUsd != null ? keeper.depreciationNote : other.depreciationNote,
-    valueBasis: keeper.priceUsd != null ? keeper.valueBasis : other.valueBasis,
-    sourceUrl: keeper.priceUsd != null ? keeper.sourceUrl : other.sourceUrl,
-    pricedAt: keeper.priceUsd != null ? keeper.pricedAt : other.pricedAt,
+    cashValueUsd: priceFrom.cashValueUsd,
+    depreciationNote: priceFrom.depreciationNote,
+    valueBasis: priceFrom.valueBasis,
+    sourceUrl: priceFrom.sourceUrl,
+    pricedAt: priceFrom.pricedAt,
     highValue: (priceUsd ?? 0) > HIGH_VALUE_OVER_USD,
     sightings: [...keeper.sightings, ...other.sightings].slice(-60),
     said: [...keeper.said, ...other.said.filter((fact) => !known.has(fact.text.toLowerCase()))].slice(-20),
@@ -223,11 +267,11 @@ function joinInto(keeper: RoomItem, other: RoomItem): RoomItem {
     changes: [...keeper.changes, ...other.changes, entry].slice(-40),
   };
   const factsChanged =
-    damage !== keeper.damage ||
-    condition !== keeper.condition ||
-    ageYears !== keeper.ageYears ||
-    usefulLifeYears !== keeper.usefulLifeYears ||
-    (keeper.priceUsd == null && priceUsd != null);
+    damage !== priceFrom.damage ||
+    condition !== priceFrom.condition ||
+    ageYears !== priceFrom.ageYears ||
+    usefulLifeYears !== priceFrom.usefulLifeYears;
+  if (joined.valueBasis) joined.valueBasis = checkedBasis(joined, joined.valueBasis);
   if (factsChanged) {
     const worn = revalue(joined);
     if (worn) {

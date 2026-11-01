@@ -13,6 +13,7 @@ All notable changes are documented here. Format: [Keep a Changelog](https://keep
 - Information explains condition and damage in the steps and the example line, and answers "How does 100proof handle damage or wear?" and "What if I do not know the brand?".
 
 ### Fixed
+- Joining two listings of the same object keeps the web-checked price when the other line only has an estimate from the video. A later line with the same description inherits that checked price, and its own age and damage set the cash value. "No damage" is not stored as a damage note.
 - A useful life of 0, or an empty model option copied from the example, no longer drops the whole clip. A placeholder "none" is not stored as damage, and a price or price paid of 0 is not stored. A template age of 0 no longer hides the year the person said.
 - A year heard in a later clip of the same object lowers cash value while filming, and that change is logged. Settling the brand on a damaged line recomputes cash value instead of copying the full price. A web price on a damaged line uses the line's own useful life.
 - "Undamaged" and "not new" are no longer read as damaged or new. A likely brand no longer marks the model as settled.

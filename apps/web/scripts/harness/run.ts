@@ -15,8 +15,8 @@ import { labelWorthAsking, openRequests } from "../../lib/evidence-requests";
 import type { ItemChange, RoomItem, RoomShard } from "../../lib/inventory";
 import { checkLines } from "../../lib/invariants";
 import { applyPatch, mergeRooms } from "../../lib/inventory-merge";
-import { applyPrices, applyReconcile } from "../../lib/scan-pipeline";
-import { ageFromSpeech, asCondition, depreciate, salvageRoomsJson, shapeWalkthrough } from "../../lib/review-shape";
+import { applyPrices, applyReconcile, shareKnownPrices } from "../../lib/scan-pipeline";
+import { ageFromSpeech, asCondition, depreciate, isBlankFact, salvageRoomsJson, shapeWalkthrough } from "../../lib/review-shape";
 import { ADD_LIMIT_MS, advanceClock, blankClock, clipsToSend, readyInOrder, SCAN_LIMIT_MS } from "../../lib/scan-session";
 
 let failures = 0;
@@ -465,6 +465,78 @@ function receiptChange(paid: number): ItemChange {
   });
   const longPriced = applyPrices({ rooms: room([longLife]) }, [{ key: "table", replacementUsd: 1000, basis: "Comparable: table", sourceUrl: null }], new Map([["table", ["table"]]])).rooms[0]?.items[0];
   check("prices: the line's own useful life is used", longPriced?.cashValueUsd === 500, `${longPriced?.cashValueUsd}`);
+  check("damage: no damage is not a damage note", isBlankFact("no damage") && isBlankFact("none") && !isBlankFact("cracked glass"));
+
+  const seenOnly = item({
+    id: "est",
+    name: "Sofa",
+    brand: "Ashley",
+    markings: null,
+    itemType: "sofa",
+    category: "furniture",
+    identitySettled: true,
+    priceUsd: 400,
+    cashValueUsd: 400,
+    depreciationNote: "Seen estimate.",
+    pricedAt: null,
+    valueBasis: "Seen in the walkthrough.",
+    said: [],
+    sightings: [{ clipId: "c1", atSec: 1 }],
+  });
+  const webChecked = item({
+    id: "web",
+    name: "Couch",
+    brand: null,
+    markings: null,
+    itemType: "sofa",
+    category: "furniture",
+    identitySettled: false,
+    priceUsd: 900,
+    cashValueUsd: 900,
+    depreciationNote: "Checked.",
+    pricedAt: "2026-10-31T00:00:00.000Z",
+    valueBasis: "Comparable: sofa",
+    said: [],
+    sightings: [{ clipId: "c2", atSec: 4 }],
+  });
+  const keptWeb = applyReconcile({ rooms: room([seenOnly, webChecked]) }, { same: [["est", "web"]], rooms: [], fix: [] }).review.rooms[0]?.items[0];
+  check("prices: joining keeps the checked price, not the seen estimate", keptWeb?.priceUsd === 900 && keptWeb.pricedAt != null, `${keptWeb?.priceUsd}`);
+
+  const checkedLamp = item({
+    id: "lamp-a",
+    name: "Lamp",
+    brand: null,
+    markings: null,
+    itemType: "lamp",
+    detail: "lamp",
+    category: "other",
+    priceUsd: 80,
+    cashValueUsd: 80,
+    depreciationNote: "Checked.",
+    pricedAt: "2026-10-31T00:00:00.000Z",
+    valueBasis: "Comparable: lamp",
+    ageYears: null,
+  });
+  const again = item({
+    id: "lamp-b",
+    name: "Lamp",
+    brand: null,
+    markings: null,
+    itemType: "lamp",
+    detail: "lamp",
+    category: "other",
+    priceUsd: null,
+    cashValueUsd: null,
+    depreciationNote: null,
+    pricedAt: null,
+    valueBasis: null,
+    ageYears: 4,
+    usefulLifeYears: 8,
+    condition: "good",
+    damage: null,
+  });
+  const shared = shareKnownPrices({ rooms: room([checkedLamp, again]) }).rooms[0]?.items.find((line) => line.id === "lamp-b");
+  check("prices: a repeat inherits the checked price and keeps its own age", shared?.priceUsd === 80 && shared.cashValueUsd === 40 && shared.pricedAt != null, `${shared?.cashValueUsd}`);
 }
 
 // Categories: the check at Done may fix a category, only to a listed one, and logs it.

@@ -33,6 +33,7 @@ Judges: this table is the index of original contributions. Each row links to the
 | 2026-10-29 | Provider screen without the arrow, phone audience switch, `/?for=providers` link; Information rebuilt as a plain product page with an example line and two new questions | information | — | Cursor (Claude Opus 5.5) | `docs/GTM.md` Information page review |
 | 2026-10-29 | Condition and damage per clip, priced into cash value only; likely brand from clues, never settling identity; price match check and "Exact" guard; category fixes at Done; claim file schema 2, invariant set 2 | scan v2 | Muse Spark 1.3 | Cursor (Claude Opus 5.5) | `docs/SCAN_PLAN.md` 2.9; harness checks passing |
 | 2026-10-31 | Listing survives a template 0 and a placeholder "none"; a later clip's year and a settled brand keep damage in the cash value | scan v2 | — | Cursor (Grok 4.7) | Harness checks for age, damage, and useful life |
+| 2026-10-31 | A joined line keeps the web-checked price, and a repeat inherits it; "no damage" is not a damage note | scan v2 | — | Cursor (Grok 4.7) | |
 
 ## Not built during the hackathon (for clarity)
 - Pre-event planning: `ARCHITECTURE.md` (written Oct 26 before kickoff). No code.

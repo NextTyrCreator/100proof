@@ -297,6 +297,13 @@ function clean(value: string | null | undefined) {
   return text.length > 0 ? text : null;
 }
 
+/** A copied placeholder, not a fact. "No damage" is the absence of a note. */
+export function isBlankFact(value: string | null | undefined) {
+  const text = (value ?? "").trim().toLowerCase();
+  if (!text) return true;
+  return /^(none|n\/a|na|no|nil|unknown|no damage|undamaged|not damaged|no visible damage|none visible|no issues|unbranded|generic|no brand|not visible)$/.test(text);
+}
+
 export function normLabel(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -620,16 +627,11 @@ function blankItem(
   };
 }
 
-/** Words a model copies when it did not see damage. They are not a damage note. */
-function placeholderDamage(value: string) {
-  return /^(none|n\/a|na|no|nil|unknown|no damage|undamaged|not damaged|no visible damage|none visible|no issues)$/.test(value.trim().toLowerCase());
-}
-
 /** Damage needs a description; a damage note makes the condition damaged. */
 function seenCondition(item: { condition: string; damage: string; damageSeverity: string; damageAtSec?: number | null }) {
   const note = clean(item.damage);
   const damage: Damage | null =
-    note && !placeholderDamage(note) ? { note, severity: asSeverity(item.damageSeverity), clipId: null, atSec: item.damageAtSec ?? null } : null;
+    note && !isBlankFact(note) ? { note, severity: asSeverity(item.damageSeverity), clipId: null, atSec: item.damageAtSec ?? null } : null;
   return { condition: damage ? ("damaged" as const) : asCondition(item.condition), damage };
 }
 
