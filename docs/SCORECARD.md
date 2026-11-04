@@ -72,8 +72,28 @@ Each run keeps: date, build, baseline version, the per-entry credited counts, du
 | 01 | | | | | | | | | | |
 | 02 | | | | | | | | | | |
 | 03 | | | | | | | | | | |
+| 04 | | | | | | | | | | |
+| 05 | | | | | | | | | | |
 
-No run has been scored yet. For repeatability the target is three consecutive complete passes at a modest change of angle or pace, with every failed run and its build kept.
+No run has been scored yet. Repeatability is the five-run series below. Every failed run and its build are kept.
+
+## The research series
+
+One run is a measurement. The accuracy rate is not that measurement. It is the average match score of five scored runs of this same space, on a stated build, scored on the automatic output before any edit. The walks can change angle and pace. They are five separate scans, not five replays of one file.
+
+The rate is stated only when all five are scored. A rejected run or an unresolved decision withholds the series. It stays in the notes, and it is not dropped to raise the average. A sixth run starts a new series. It does not replace a low one.
+
+| Rule | What it is |
+| --- | --- |
+| Average | The accuracy rate, in percent, to one decimal. |
+| Target | Each of the five at 95.0 or better, and the average at 95.0 or better. |
+| Variance | The sample variance of the five match scores, divided by 4. |
+| Consistency | Variance at most 4. That is a sample standard deviation of 2 percentage points. Above that, the walks do not agree closely enough to treat the average as stable. The average is still recorded, and the result is inconsistent. |
+| Spread | The highest match score minus the lowest, reported beside the variance. |
+
+A series at the target and inside the variance is "meets target". No series has been recorded. This target is the bar for the research. It is not a claim that a scan is 95% accurate.
+
+On this 60-unit list, one missed unit with nothing extra scores 98.3, and three missed units score 95.0. The variance gate is what keeps one strong walk and one weak walk from disappearing into an average. `scoreSeries` in `apps/web/lib/scorecard.ts` applies the rule, and the harness checks it.
 
 ## What this score does not cover
 

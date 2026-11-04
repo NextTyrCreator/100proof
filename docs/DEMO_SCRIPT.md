@@ -57,7 +57,7 @@ From `docs/GTM.md`, checked against the event page on 2026-10-28: Impact 30%, Me
 "When you are done, the record is sealed with a SHA-256 hash and dated. Download it. Send it to your carrier. Every line keeps the clip and the second it came from. 100proof does not decide coverage. It gives the carrier a list it can check, and it gives you the list before you need it."
 
 **[2:32] Screen: `docs/SCORECARD.md`, the baseline table, then Run 01.**
-"How do we know it is right? We inventoried this space by hand first. Forty entries, sixty units. Then we scored the scan against it, one unit at a time, before any edit. Run one: [TP] of sixty captured, [FP] extra, match score [N] percent. The misses are listed by name. That number is in the repo, with every run after it."
+"How do we know it is right? We inventoried this space by hand first. Forty entries, sixty units. Then we scored the scan against it, one unit at a time, before any edit. Run one: [TP] of sixty captured, [FP] extra, match score [N] percent. The misses are listed by name. That number is in the repo, with every run after it." [This is one run. Do not call it the accuracy rate. That rate is the average of five scored runs, and only once they agree. Until five exist, say the run and the misses.]
 
 **[2:48] To lens.**
 "Every insurer already asks for this list. Now it comes from a walk, with its proof attached, and it is yours before anything happens. 100proof. The repo and the demo are in the description."
@@ -96,5 +96,5 @@ The honest strength is depth, not count. Muse Spark 1.3 does five different jobs
 ## The run before recording
 
 1. Film the four rooms once. Label close-ups on the Vizio, the Marshall, and the Peloton. At the dresser, say the telephone and the clothes out loud with the drawer closed.
-2. Score the automatic output against the baseline with `scoreRun` (`apps/web/lib/scorecard.ts`) and write Run 01 into `docs/SCORECARD.md`. A spoken line counts as included if it is on the automatic output.
-3. Put the four bracketed numbers into this script. If the match score is low, the script still works: say the number and the misses. Honest beats round.
+2. Score each automatic output with `scoreRun` (`apps/web/lib/scorecard.ts`) and write the run into `docs/SCORECARD.md`. A spoken line counts as included if it is on the automatic output.
+3. Put Run 01's four bracketed numbers into this script. If the match score is low, say the number and the misses. After five scored runs, `scoreSeries` gives the average, the variance, and whether the walks agree. Do not speak an accuracy rate from one run.

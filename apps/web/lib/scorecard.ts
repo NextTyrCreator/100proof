@@ -182,6 +182,61 @@ export function scoreRun(input: RunInput, expected: ExpectedEntry[] = EXPECTED):
   };
 }
 
+/**
+ * The research series. One walk is a measurement. The accuracy rate is the average match score of
+ * five scored walks of this same space, and it is not stated before those five exist.
+ *
+ * The target is 95 on every run and on the average. That target is a bar for this research. It is
+ * not a result, and nothing here claims a scan has reached it.
+ *
+ * Consistency is the sample variance of the five match scores. Variance above 4 (a sample standard
+ * deviation of 2 percentage points) means the walks do not agree closely enough to treat the average
+ * as stable. The average is still recorded. A pending or rejected run withholds the series; it is
+ * not dropped to improve the average. A sixth run is a new series.
+ */
+export const RESEARCH_SERIES = {
+  runs: 5,
+  target: 95,
+  maxVariance: 4,
+} as const;
+
+function round2(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+/** One decimal on a number that is already a percent. `round1` is for a 0..1 ratio. */
+function roundPercent(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
+/** Average, variance, and agreement for a series of scored runs. No rate before five scored runs. */
+export function scoreSeries(runs: RunScore[]) {
+  const blocked = runs.find((run) => run.status !== "scored");
+  if (blocked?.status === "invalid") return { status: "withheld" as const, reason: "A run was rejected. The series has no rate." };
+  if (blocked?.status === "pending") return { status: "withheld" as const, reason: "A run still has an unresolved decision. The series has no rate." };
+  if (runs.length < RESEARCH_SERIES.runs) {
+    return {
+      status: "incomplete" as const,
+      reason: `The rate is stated after ${RESEARCH_SERIES.runs} scored runs. ${runs.length} so far.`,
+      recorded: runs.length,
+    };
+  }
+  if (runs.length > RESEARCH_SERIES.runs) {
+    return { status: "invalid" as const, reason: `A series is ${RESEARCH_SERIES.runs} scored runs. This has ${runs.length}. Start a new series.` };
+  }
+
+  const scores = runs.map((run) => (run.status === "scored" ? run.matchScore : 0));
+  const mean = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  const average = roundPercent(mean);
+  const variance = round2(scores.reduce((sum, score) => sum + (score - mean) ** 2, 0) / (scores.length - 1));
+  const spread = roundPercent(Math.max(...scores) - Math.min(...scores));
+  const atTarget = scores.every((score) => score >= RESEARCH_SERIES.target) && average >= RESEARCH_SERIES.target;
+  const consistent = variance <= RESEARCH_SERIES.maxVariance;
+  const result =
+    atTarget && consistent ? "meets target" : atTarget ? "inconsistent" : consistent ? "below target" : "below target and inconsistent";
+  return { status: "recorded" as const, scores, average, variance, spread, atTarget, consistent, result };
+}
+
 /** A run input where every expected unit is credited. The starting point for scoring a walk by hand. */
 export function allCorrect(expected: ExpectedEntry[] = EXPECTED): Record<number, number> {
   return Object.fromEntries(expected.map((entry) => [entry.id, entry.units]));

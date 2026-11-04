@@ -19,7 +19,7 @@ import { applyPatch, mergeRooms } from "../../lib/inventory-merge";
 import { applyPrices, applyReconcile, heldNearPaid, shareKnownPrices } from "../../lib/scan-pipeline";
 import { ageFromSpeech, asCondition, clearSharedSightings, depreciate, isBlankFact, isNotProperty, modelRecognized, salvageRoomsJson, shapeWalkthrough } from "../../lib/review-shape";
 import { lineConfidence } from "../../lib/line-confidence";
-import { allCorrect, COUNTING_RULES, EXPECTED, expectedUnits, roomTotals, SCORECARD_BASELINE, scoreRun } from "../../lib/scorecard";
+import { allCorrect, COUNTING_RULES, EXPECTED, expectedUnits, RESEARCH_SERIES, roomTotals, SCORECARD_BASELINE, scoreRun, scoreSeries } from "../../lib/scorecard";
 import { ADD_LIMIT_MS, advanceClock, blankClock, clipsToSend, readyInOrder, SCAN_LIMIT_MS } from "../../lib/scan-session";
 
 let failures = 0;
@@ -729,6 +729,34 @@ function receiptChange(paid: number): ItemChange {
   check("scorecard: crediting above the target is rejected", over.status === "invalid");
   const empty = scoreRun({ ...base, correct: {}, includedUnits: 0 });
   check("scorecard: an empty output is 0% with no precision", empty.status === "scored" && empty.matchScore === 0 && empty.precision === null && empty.falseNegatives === 60);
+
+  // The research series: five scored walks, then an average. Variance is how far the walks drift.
+  const miss = (ids: number[]) => {
+    const correct = allCorrect();
+    for (const id of ids) correct[id] = 0;
+    return scoreRun({ ...base, correct, includedUnits: 60 - ids.length });
+  };
+  const at95 = miss([1, 2, 4]);
+  const at90 = miss([1, 2, 4, 5, 7, 8]);
+  check("series: three misses on this list is the 95 line", at95.status === "scored" && at95.matchScore === 95);
+  check("series: the bar is five runs at 95, with variance at most 4", RESEARCH_SERIES.runs === 5 && RESEARCH_SERIES.target === 95 && RESEARCH_SERIES.maxVariance === 4);
+  const four = scoreSeries([perfect, perfect, perfect, perfect]);
+  check("series: four scored runs state no rate", four.status === "incomplete" && four.recorded === 4 && !("average" in four));
+  const steady = scoreSeries([at95, at95, at95, at95, at95]);
+  check("series: five runs at 95 average 95 and agree", steady.status === "recorded" && steady.average === 95 && steady.variance === 0 && steady.result === "meets target");
+  const outlier = scoreSeries([at95, at95, at95, at95, perfect]);
+  check(
+    "series: one perfect run among 95s is recorded, and the walks do not agree",
+    outlier.status === "recorded" && outlier.average === 96 && outlier.variance === 5 && outlier.spread === 5 && outlier.atTarget && !outlier.consistent && outlier.result === "inconsistent",
+  );
+  const below = scoreSeries([at90, at90, at90, at90, at90]);
+  check("series: five runs at 90 agree, and stay below the target", below.status === "recorded" && below.average === 90 && below.variance === 0 && below.consistent && below.result === "below target");
+  const split = scoreSeries([at90, at90, at90, perfect, perfect]);
+  check("series: a 90 and a 100 do not average into a stable rate", split.status === "recorded" && split.average === 94 && split.variance === 30 && split.result === "below target and inconsistent");
+  const held = scoreSeries([perfect, perfect, perfect, perfect, pending]);
+  check("series: an unresolved run withholds the rate", held.status === "withheld");
+  const extra = scoreSeries([perfect, perfect, perfect, perfect, perfect, perfect]);
+  check("series: a sixth run is a new series, not a replacement", extra.status === "invalid");
 }
 
 console.log(failures === 0 ? "\nHarness: all checks passed." : `\nHarness: ${failures} check(s) failed.`);
