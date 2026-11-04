@@ -208,7 +208,7 @@ export function InventoryDocument() {
           </div>
           {returning ? null : (
             <div className="first-inventory">
-              <p className="first-inventory-lead">One walk through the house. A clear label makes the list more accurate.</p>
+              <p className="first-inventory-lead">Tap each step, then Begin when you are ready.</p>
               <ol className="steps">
                 {steps.map((step, index) => {
                   const open = openStep === index;
@@ -224,6 +224,14 @@ export function InventoryDocument() {
                         <span className="index">0{index + 1}</span>
                         <span className="step-title">{step.title}</span>
                       </button>
+                      {index < steps.length - 1 ? (
+                        <span className="step-arrow" aria-hidden="true">
+                          <svg viewBox="0 0 28 16">
+                            <path d="M2 8h16" />
+                            <path d="M14 3.5 22 8l-8 4.5" />
+                          </svg>
+                        </span>
+                      ) : null}
                     </li>
                   );
                 })}

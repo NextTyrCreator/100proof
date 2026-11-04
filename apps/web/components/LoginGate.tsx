@@ -45,6 +45,7 @@ export function LoginGate({ email, startAs }: { email: string | null; startAs: A
     setSettled(true);
   }, [startAs, setAudience]);
 
+  if (email && startAs === "provider") return <ProviderScreen />;
   if (email) return <InventoryDocument />;
 
   const shown = settled ? audience : startAs;

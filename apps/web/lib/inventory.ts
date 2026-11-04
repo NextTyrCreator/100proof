@@ -93,6 +93,10 @@ export type AddressPoint = {
   latitude: number;
   longitude: number;
   label: string;
+  street?: string;
+  city?: string;
+  state?: string;
+  county?: string;
 };
 
 /** A room is one shard. Recognition writes a room at a time. */

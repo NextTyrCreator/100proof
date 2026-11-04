@@ -44,6 +44,10 @@ export const savedDocumentSchema = z.object({
       latitude: z.number().gte(-90).lte(90),
       longitude: z.number().gte(-180).lte(180),
       label: z.string().trim().min(1).max(300),
+      street: z.string().trim().max(120).optional(),
+      city: z.string().trim().max(80).optional(),
+      state: z.string().trim().max(80).optional(),
+      county: z.string().trim().max(80).optional(),
     })
     .nullable(),
   locationCheck: z.object({ checkedAt: z.string().min(1).max(40), within: z.boolean().nullable() }).nullable(),

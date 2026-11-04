@@ -62,7 +62,12 @@ export function HeaderBar({ signedIn, email }: { signedIn: boolean; email: strin
         {signedIn ? <Nav /> : <AudienceTabs />}
         {signedIn ? (
           <div className="account">
-            {email ? <p className="account-email">{email}</p> : null}
+            {email ? (
+              <p className="account-email">
+                <span className="account-email-label">Logged in as:</span>
+                <span>{email}</span>
+              </p>
+            ) : null}
             <SignOut />
           </div>
         ) : null}
@@ -83,9 +88,18 @@ export function HeaderBar({ signedIn, email }: { signedIn: boolean; email: strin
             <div className="menu-layer" style={{ top: barHeight }}>
               <div className="menu-backdrop" onClick={() => setOpen(false)} />
               <div className="menu-sheet" id={menuId} role="dialog" aria-label="Menu" onClick={closeFromChoice}>
-                {signedIn && email ? <p className="menu-email">{email}</p> : null}
                 {signedIn ? <Nav /> : <AudienceTabs />}
-                {signedIn ? <SignOut className="menu-logout" /> : null}
+                {signedIn ? (
+                  <div className="menu-account">
+                    {email ? (
+                      <p className="menu-account-who">
+                        <span className="menu-account-label">Logged in as:</span>
+                        <span className="menu-account-email">{email}</span>
+                      </p>
+                    ) : null}
+                    <SignOut className="menu-logout" />
+                  </div>
+                ) : null}
               </div>
             </div>,
             document.body,

@@ -6,7 +6,7 @@ import { addressRegionLabel } from "../lib/address-search";
 import { dataUrlBlob, sendEvidence } from "../lib/evidence-client";
 import { modelRecognized } from "../lib/review-shape";
 import { openRequests, type EvidenceRequest } from "../lib/evidence-requests";
-import { formatClock, locationWithin, sha256Hex, type SpokenLine } from "../lib/inventory";
+import { formatClock, sha256Hex, type SpokenLine } from "../lib/inventory";
 import { keptFromInventories, readKeptValues, rememberKeptValues } from "../lib/kept-values";
 import { narrationTap, type NarrationTap } from "../lib/scan-audio";
 import { makeRecorder, scaledCapture, type ScaledCapture } from "../lib/scan-capture";
@@ -29,7 +29,6 @@ import { applyPrices, applyReconcile, knownSoFar, linesToPrice, reconcileInput, 
 import type { LineToPrice } from "../lib/review-scan";
 import { reviewResultSchema, type PricedLine, type ReviewResult } from "../lib/review-shape";
 import { spokenLineSchema } from "../lib/inventory-record";
-import { AddressLine } from "./AddressLine";
 import { combinePieceReviews, patchReviewItem, tagReview } from "../lib/inventory-merge";
 import { useInventory } from "./InventoryProvider";
 import { ItemizedRooms } from "./ItemizedRooms";
@@ -38,6 +37,36 @@ import { ScanGlance } from "./ScanGlance";
 import { z } from "zod";
 
 type Phase = "idle" | "starting" | "recording" | "paused" | "reviewing" | "reviewed" | "review-failed";
+
+type Facing = "environment" | "user";
+
+type ZoomRange = { min: number; max: number; step: number };
+
+/** Optical zoom is a camera capability, not in lib.dom yet. Null when this camera cannot zoom. */
+function zoomRangeOf(track: MediaStreamTrack | undefined): ZoomRange | null {
+  if (!track || typeof track.getCapabilities !== "function") return null;
+  const caps = track.getCapabilities() as MediaTrackCapabilities & { zoom?: { min?: number; max?: number; step?: number } };
+  const zoom = caps.zoom;
+  if (!zoom || typeof zoom.min !== "number" || typeof zoom.max !== "number" || zoom.max <= zoom.min) return null;
+  const span = zoom.max - zoom.min;
+  const step = Math.max(zoom.step && zoom.step > 0 ? zoom.step : 0, span / 10);
+  return { min: zoom.min, max: zoom.max, step };
+}
+
+function currentZoom(track: MediaStreamTrack | undefined, range: ZoomRange) {
+  const settings = track?.getSettings?.() as (MediaTrackSettings & { zoom?: number }) | undefined;
+  const value = settings?.zoom;
+  return typeof value === "number" ? Math.min(range.max, Math.max(range.min, value)) : range.min;
+}
+
+function videoConstraints(facing: Facing): MediaTrackConstraints {
+  return {
+    facingMode: facing === "environment" ? { ideal: "environment" } : { exact: "user" },
+    width: { ideal: 1280, max: 1280 },
+    height: { ideal: 720, max: 720 },
+    frameRate: { ideal: 24, max: 24 },
+  };
+}
 
 type RecordedPiece = { id: string; blob: Blob; audio: Blob | null; startedAt: string; durationMs: number; posterUrl: string };
 
@@ -124,7 +153,11 @@ function lineCount(review: ReviewResult | null) {
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusIds?: string[] }) {
+/**
+ * The scan camera. With `autoStart` the camera opens as soon as it mounts, so the wizard's
+ * "Begin scan" is the only start button. Without it (adding to an inventory) it waits for its own.
+ */
+export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack: () => void; focusIds?: string[]; autoStart?: boolean }) {
   const router = useRouter();
   const {
     addClip,
@@ -176,6 +209,12 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
   const hadClipsRef = useRef(false);
   const tapRef = useRef<NarrationTap | null>(null);
   const dismissedRef = useRef(new Set<string>());
+  const facingRef = useRef<Facing>("environment");
+  const autoStartedRef = useRef(false);
+  const [facing, setFacing] = useState<Facing>("environment");
+  const [flipping, setFlipping] = useState(false);
+  const [zoomRange, setZoomRange] = useState<ZoomRange | null>(null);
+  const [zoom, setZoom] = useState(1);
   const [needsRetry, setNeedsRetry] = useState(false);
   const [liveAsk, setLiveAsk] = useState<{ clip: number; request: EvidenceRequest } | null>(null);
   const [snapping, setSnapping] = useState(false);
@@ -201,10 +240,18 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
   }, []);
 
   useEffect(() => {
-    const filming = phase === "recording" || phase === "paused";
+    const filming = phase === "starting" || phase === "recording" || phase === "paused";
     document.body.classList.toggle("is-filming", filming);
     return () => document.body.classList.remove("is-filming");
   }, [phase]);
+
+  useEffect(() => {
+    if (!autoStart || autoStartedRef.current || !selectedRef.current?.place) return;
+    autoStartedRef.current = true;
+    void beginScan();
+    // Runs once on mount; beginScan reads refs for everything else.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart]);
 
   useEffect(() => {
     if (phase !== "recording" && phase !== "paused") return;
@@ -745,27 +792,80 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
   }
 
   async function openStream() {
-    const video = {
-      facingMode: { ideal: "environment" },
-      width: { ideal: 1280, max: 1280 },
-      height: { ideal: 720, max: 720 },
-      frameRate: { ideal: 24, max: 24 },
-    };
     const audio = { echoCancellation: true, noiseSuppression: true };
-    const attempts: MediaStreamConstraints[] = [
-      { video, audio },
-      { video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio },
-      { video: true, audio: true },
+    const attempts: { constraints: MediaStreamConstraints; facing: Facing }[] = [
+      { constraints: { video: videoConstraints("environment"), audio }, facing: "environment" },
+      { constraints: { video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio }, facing: "user" },
+      { constraints: { video: true, audio: true }, facing: "environment" },
     ];
     let lastError: unknown;
-    for (const constraints of attempts) {
+    for (const attempt of attempts) {
       try {
-        return await navigator.mediaDevices.getUserMedia(constraints);
+        const stream = await navigator.mediaDevices.getUserMedia(attempt.constraints);
+        facingRef.current = attempt.facing;
+        setFacing(attempt.facing);
+        return stream;
       } catch (error) {
         lastError = error;
       }
     }
     throw lastError;
+  }
+
+  /** Read what this lens can do. Zoom controls only show when the camera itself zooms. */
+  function readLens(stream: MediaStream) {
+    const track = stream.getVideoTracks()[0];
+    const range = zoomRangeOf(track);
+    setZoomRange(range);
+    setZoom(range ? currentZoom(track, range) : 1);
+  }
+
+  /**
+   * Swap front and back lens. The audio track stays, so narration continues. While a clip is
+   * recording the encoder reads the preview canvas, so the swap lands in the recording too; when the
+   * browser records the camera directly the swap waits for a pause.
+   */
+  async function flipCamera() {
+    const stream = streamRef.current;
+    const video = videoRef.current;
+    if (!stream || !video || flipping) return;
+    if (modeRef.current === "recording" && !captureRef.current) return;
+    const next: Facing = facingRef.current === "environment" ? "user" : "environment";
+    setFlipping(true);
+    try {
+      const fresh = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(next), audio: false });
+      const lens = fresh.getVideoTracks()[0];
+      if (!lens) throw new Error("lens");
+      for (const track of stream.getVideoTracks()) {
+        stream.removeTrack(track);
+        track.stop();
+      }
+      stream.addTrack(lens);
+      video.srcObject = stream;
+      try {
+        await video.play();
+      } catch {
+        // Autoplay can lag; the frames still land.
+      }
+      facingRef.current = next;
+      setFacing(next);
+      readLens(stream);
+    } catch {
+      // The other lens is missing or blocked. Keep filming with this one.
+    } finally {
+      setFlipping(false);
+    }
+  }
+
+  function changeZoom(direction: 1 | -1) {
+    const range = zoomRange;
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!range || !track) return;
+    const next = Math.min(range.max, Math.max(range.min, Number((zoom + direction * range.step).toFixed(2))));
+    if (next === zoom) return;
+    setZoom(next);
+    const constraints = { advanced: [{ zoom: next }] } as unknown as MediaTrackConstraints;
+    track.applyConstraints(constraints).catch(() => setZoom(currentZoom(track, range)));
   }
 
   async function beginScan() {
@@ -787,6 +887,7 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
     try {
       const stream = await openStream();
       streamRef.current = stream;
+      readLens(stream);
       const video = videoRef.current;
       if (!video) throw new Error("preview");
       prepareVideo(video);
@@ -925,84 +1026,142 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
   }
 
   const live = phase === "starting" || phase === "recording" || phase === "paused";
-  const within = selected ? locationWithin(selected) : null;
   const slots = Math.round(limitMs / CLIP_MS);
   const clipNumber = Math.min(slots, clock.clips + (phase === "recording" ? 1 : 0));
+  const remainingMs = Math.max(0, limitMs - clock.recordedMs);
   const reviewing = progress.total > progress.listed;
+  const canFlip = !flipping && (phase === "paused" || (phase === "recording" && captureRef.current !== null));
+  const hasClips = partsRef.current.length > 0;
 
   if (!selected) return null;
 
   return (
     <div className="recorder">
-      <div className="sheet scan-setup">
-        {phase === "idle" ? (
+      {phase === "idle" ? (
+        <div className="sheet scan-setup">
           <button type="button" className="back-arrow" onClick={onBack}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M19 12 H6 M11 6 L5 12 L11 18" />
             </svg>
             <span className="sr-only">Back</span>
           </button>
-        ) : null}
-        <p className="confirm-title">{selected.title.trim()}</p>
-        {addressRegionLabel(selected.addressRegion) ? (
-          <p className="confirm-address">{addressRegionLabel(selected.addressRegion)}</p>
-        ) : null}
-        <AddressLine address={selected.homeAddress.trim()} within={within} />
-        {selected.clips.length > 0 && phase === "idle" ? (
-          <p className="hint">This adds up to 5 more minutes to the inventory. A repeat of something already listed is matched to its line.</p>
-        ) : null}
-      </div>
+          <p className="confirm-title">{selected.title.trim()}</p>
+          {selected.clips.length > 0 ? (
+            <p className="hint">This adds up to 5 more minutes to the inventory. A repeat of something already listed is matched to its line.</p>
+          ) : null}
+        </div>
+      ) : null}
       {live ? (
-        <div className={phase === "starting" ? "preview" : "preview is-stage"}>
+        <div className={`preview is-stage${facing === "user" ? " is-mirrored" : ""}`}>
           <video ref={videoRef} muted autoPlay playsInline disablePictureInPicture />
           {phase === "starting" ? (
             <div className="preview-idle">
               <Loader size={72} layout="inline" />
+              <p className="film-note">Opening the camera</p>
             </div>
           ) : null}
-          {phase === "recording" ? <span className="rec-dot" aria-hidden="true" /> : null}
           <ScanGlance videoRef={videoRef} active={phase === "recording"} inventoryId={selected.id} lines={progress.lines} />
           {phase === "recording" || phase === "paused" ? (
-            <div className="film-bar">
-              <div className="clip-rail" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${slots}, 1fr)` }}>
-                {Array.from({ length: slots }, (_, index) => {
-                  const start = index * CLIP_MS;
-                  const amount = Math.min(1, Math.max(0, (clock.recordedMs - start) / CLIP_MS));
-                  return (
-                    <span className="clip-mark" key={index}>
-                      <span style={{ transform: `scaleX(${amount})` }} />
-                    </span>
-                  );
-                })}
-              </div>
-              <p className="record-time" aria-live="polite">
-                {phase === "recording"
-                  ? `Clip ${clipNumber} · ${formatClock(clock.clipMs)} of 0:30 · ${formatClock(clock.recordedMs)} of ${formatClock(limitMs)}`
-                  : `Paused · ${formatClock(clock.recordedMs)} of ${formatClock(limitMs)}`}
-              </p>
-              {phase === "recording" ? (
-                <button type="button" className="button brand" onClick={() => closeClip("pause")}>
-                  Pause
+            <>
+              <div className="film-top">
+                <p className="film-status" aria-live="polite">
+                  {phase === "recording" ? <span className="rec-dot" aria-hidden="true" /> : null}
+                  <span>{phase === "recording" ? `Clip ${clipNumber} · ${formatClock(clock.clipMs)}` : "Paused"}</span>
+                </p>
+                <p className="film-remaining">
+                  <strong>{formatClock(remainingMs)}</strong>
+                  <span>left</span>
+                </p>
+                <button
+                  type="button"
+                  className="film-icon"
+                  onClick={() => void flipCamera()}
+                  disabled={!canFlip}
+                  aria-label={facing === "environment" ? "Switch to front camera" : "Switch to back camera"}
+                  title={canFlip ? undefined : "Pause to switch cameras"}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 7.5h3l1.6-2h6.8l1.6 2h3v11H4z" />
+                    <path d="M9.2 13.2a3 3 0 0 0 5.4 1.2M14.8 12.8a3 3 0 0 0-5.4-1.2" />
+                    <path d="M14.6 10.6v2.2h-2.2M9.4 15.4v-2.2h2.2" />
+                  </svg>
                 </button>
-              ) : (
-                <div className="film-actions">
-                  <button type="button" className="button brand" onClick={resumeScan}>
-                    Play
+              </div>
+              {zoomRange ? (
+                <div className="film-zoom" role="group" aria-label="Zoom">
+                  <button type="button" className="film-icon" onClick={() => changeZoom(1)} disabled={zoom >= zoomRange.max} aria-label="Zoom in">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 6v12M6 12h12" />
+                    </svg>
                   </button>
-                  <button type="button" className="button quiet" onClick={() => closeClip("finish")}>
+                  <span className="film-zoom-value">{zoom.toFixed(1)}×</span>
+                  <button type="button" className="film-icon" onClick={() => changeZoom(-1)} disabled={zoom <= zoomRange.min} aria-label="Zoom out">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M6 12h12" />
+                    </svg>
+                  </button>
+                </div>
+              ) : null}
+              <div className="film-bar">
+                {phase === "paused" && liveAsk ? (
+                  <div className="ask-live film-ask" role="status" aria-live="polite">
+                    <p className="ask-from">Clip {liveAsk.clip} asks</p>
+                    <p className="ask-prompt">{liveAsk.request.prompt}</p>
+                    <p className="ask-why">{liveAsk.request.why}</p>
+                    <div className="ask-actions">
+                      {liveAsk.request.kind === "label" || liveAsk.request.kind === "receipt" ? (
+                        <button type="button" className="button quiet" onClick={() => void snapForAsk()} disabled={snapping}>
+                          {snapping ? "Checking" : "Snap it"}
+                        </button>
+                      ) : null}
+                      <button type="button" className="text-button" onClick={dismissAsk}>
+                        Not now
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {phase === "paused" && snapNote ? <p className="film-note">{snapNote}</p> : null}
+                <div className="clip-rail" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${slots}, 1fr)` }}>
+                  {Array.from({ length: slots }, (_, index) => {
+                    const start = index * CLIP_MS;
+                    const amount = Math.min(1, Math.max(0, (clock.recordedMs - start) / CLIP_MS));
+                    return (
+                      <span className="clip-mark" key={index}>
+                        <span style={{ transform: `scaleX(${amount})` }} />
+                      </span>
+                    );
+                  })}
+                </div>
+                <div className="film-controls">
+                  <p className="film-note film-controls-note">
+                    {phase === "recording"
+                      ? "Pause any time. Only what you film is listed."
+                      : reviewing
+                        ? `Listed ${progress.listed} of ${progress.total} clips.`
+                        : hasClips
+                          ? "Play to keep going, or Done to finish."
+                          : "Press record to start the first clip."}
+                  </p>
+                  {phase === "recording" ? (
+                    <button type="button" className="film-shutter is-recording" onClick={() => closeClip("pause")} aria-label="Pause recording">
+                      <span aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <button type="button" className="film-shutter" onClick={resumeScan} aria-label={hasClips ? "Resume recording" : "Start recording"}>
+                      <span aria-hidden="true" />
+                    </button>
+                  )}
+                  <button type="button" className="button film-done" onClick={() => closeClip("finish")} disabled={!hasClips && phase !== "recording"}>
                     Done
                   </button>
                 </div>
-              )}
-              {phase === "paused" ? (
-                <p className="film-note">Play to continue, or Done to finish. After 15 minutes this sends what you have.</p>
-              ) : null}
-              {error ? (
-                <p className="film-note" role="alert">
-                  {error}
-                </p>
-              ) : null}
-            </div>
+                {error ? (
+                  <p className="film-note" role="alert">
+                    {error}
+                  </p>
+                ) : null}
+              </div>
+            </>
           ) : null}
         </div>
       ) : null}
@@ -1022,25 +1181,6 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
           </div>
         </div>
       ) : null}
-      {phase === "paused" && reviewing ? <p className="hint">{`Listed ${progress.listed} of ${progress.total} clips.`}</p> : null}
-      {phase === "paused" && liveAsk ? (
-        <div className="ask-live" role="status" aria-live="polite">
-          <p className="ask-from">Clip {liveAsk.clip} asks</p>
-          <p className="ask-prompt">{liveAsk.request.prompt}</p>
-          <p className="ask-why">{liveAsk.request.why}</p>
-          <div className="ask-actions">
-            {liveAsk.request.kind === "label" || liveAsk.request.kind === "receipt" ? (
-              <button type="button" className="button quiet" onClick={() => void snapForAsk()} disabled={snapping}>
-                {snapping ? "Checking" : "Snap it"}
-              </button>
-            ) : null}
-            <button type="button" className="text-button" onClick={dismissAsk}>
-              Not now
-            </button>
-          </div>
-        </div>
-      ) : null}
-      {phase === "paused" && snapNote ? <p className="hint">{snapNote}</p> : null}
       {phase === "reviewed" && selected ? (
         <>
           <ItemizedRooms
@@ -1067,12 +1207,12 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
           Retry
         </button>
       ) : null}
-      {phase === "idle" || phase === "starting" ? (
-        <button type="button" className="button brand record-action" onClick={beginScan} disabled={phase === "starting"}>
-          {phase === "starting" ? "Starting" : "Begin scan"}
+      {phase === "idle" ? (
+        <button type="button" className="button brand record-action" onClick={beginScan}>
+          {error ? "Try again" : "Begin scan"}
         </button>
       ) : null}
-      {error && phase !== "recording" && phase !== "paused" ? (
+      {error && !live ? (
         <p className="form-error" role="alert">
           {error}
         </p>

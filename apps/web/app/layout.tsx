@@ -40,6 +40,7 @@ export const metadata: Metadata = {
   },
   twitter: { card: "summary", title: `100proof | ${title}`, description },
   robots: { index: true, follow: true },
+  formatDetection: { email: false, telephone: false, address: false },
 };
 
 export const viewport: Viewport = {

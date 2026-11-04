@@ -22,6 +22,14 @@ const candidateSchema = z.object({
           x: z.number(),
           y: z.number(),
         }),
+        attributes: z
+          .object({
+            StAddr: z.string().nullish(),
+            City: z.string().nullish(),
+            Region: z.string().nullish(),
+            Subregion: z.string().nullish(),
+          })
+          .nullish(),
       }),
     )
     .max(5),
@@ -38,6 +46,10 @@ type AddressPointHit = {
   label: string;
   latitude: number;
   longitude: number;
+  street?: string;
+  city?: string;
+  state?: string;
+  county?: string;
 };
 
 /**
@@ -150,15 +162,22 @@ export async function resolveAddress(hit: AddressHit, signal?: AbortSignal): Pro
   url.searchParams.set("SingleLine", hit.label);
   url.searchParams.set("magicKey", hit.magicKey);
   url.searchParams.set("maxLocations", "1");
+  url.searchParams.set("outFields", "StAddr,City,Region,Subregion");
   url.searchParams.set("f", "pjson");
   const response = await fetch(url, { signal });
   if (!response.ok) return null;
   const parsed = candidateSchema.safeParse(await response.json());
   const match = parsed.success ? parsed.data.candidates[0] : undefined;
   if (!match) return null;
+  const parts = match.attributes;
+  const street = parts?.StAddr?.trim() || match.address.split(",")[0]?.trim() || "";
   return {
     label: match.address,
     longitude: match.location.x,
     latitude: match.location.y,
+    street: street || undefined,
+    city: parts?.City?.trim() || undefined,
+    state: parts?.Region?.trim() || undefined,
+    county: parts?.Subregion?.trim() || undefined,
   };
 }

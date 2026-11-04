@@ -27,6 +27,10 @@ const addressPointSchema = z.object({
   latitude: z.number().gte(-90).lte(90),
   longitude: z.number().gte(-180).lte(180),
   label: z.string().trim().min(1).max(300),
+  street: z.string().trim().max(120).optional(),
+  city: z.string().trim().max(80).optional(),
+  state: z.string().trim().max(80).optional(),
+  county: z.string().trim().max(80).optional(),
 });
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export const scanPlaceSchema = z.object({
