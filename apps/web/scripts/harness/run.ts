@@ -12,11 +12,14 @@ import { cleanTranscript } from "@100proof/meta-client";
 import { accuracyMark, accuracySummary } from "../../lib/accuracy-mark";
 import { scoreRooms, type TruthLine } from "../../lib/eval-score";
 import { labelWorthAsking, openRequests } from "../../lib/evidence-requests";
-import type { ItemChange, RoomItem, RoomShard } from "../../lib/inventory";
+import { inventoryCsv, replacementTotal, type HomeInventory, type ItemChange, type RoomItem, type RoomShard } from "../../lib/inventory";
+import { HOUSE_STUDY, newUserMinutes, scoreHouseWalk } from "../../lib/house-study";
 import { checkLines } from "../../lib/invariants";
 import { applyPatch, mergeRooms } from "../../lib/inventory-merge";
-import { applyPrices, applyReconcile, shareKnownPrices } from "../../lib/scan-pipeline";
-import { ageFromSpeech, asCondition, depreciate, isBlankFact, salvageRoomsJson, shapeWalkthrough } from "../../lib/review-shape";
+import { applyPrices, applyReconcile, heldNearPaid, shareKnownPrices } from "../../lib/scan-pipeline";
+import { ageFromSpeech, asCondition, clearSharedSightings, depreciate, isBlankFact, isNotProperty, modelRecognized, salvageRoomsJson, shapeWalkthrough } from "../../lib/review-shape";
+import { lineConfidence } from "../../lib/line-confidence";
+import { allCorrect, COUNTING_RULES, EXPECTED, expectedUnits, roomTotals, SCORECARD_BASELINE, scoreRun } from "../../lib/scorecard";
 import { ADD_LIMIT_MS, advanceClock, blankClock, clipsToSend, readyInOrder, SCAN_LIMIT_MS } from "../../lib/scan-session";
 
 let failures = 0;
@@ -54,6 +57,9 @@ function item(patch: Partial<RoomItem>): RoomItem {
     userValueUsd: null,
     photoUrl: null,
     photoPath: null,
+    files: [],
+    declared: false,
+    hidden: false,
     highValue: false,
     sightings: [
       { clipId: "clip-1", atSec: 4 },
@@ -187,10 +193,10 @@ function receiptChange(paid: number): ItemChange {
   check("salvage: a truncated listing keeps the finished room", salvaged?.rooms?.[0]?.title === "Patio", JSON.stringify(salvaged)?.slice(0, 80));
 }
 
-// Session: ten minutes for a scan, five more to add, two clips in flight, results in order.
+// Session: fifteen minutes for a scan, five more to add, two clips in flight, results in order.
 {
   const full = advanceClock(blankClock(), SCAN_LIMIT_MS + 5000);
-  check("session: a scan stops at ten minutes", full.clock.recordedMs === 10 * 60 * 1000 && full.close === "finish");
+  check("session: a scan stops at fifteen minutes", full.clock.recordedMs === 15 * 60 * 1000 && full.close === "finish");
   const added = advanceClock(blankClock(), ADD_LIMIT_MS + 5000, ADD_LIMIT_MS);
   check("session: scan more stops at five minutes", added.clock.recordedMs === 5 * 60 * 1000 && added.close === "finish");
   check("pipeline: two clips go out at once", clipsToSend(5, new Set(), new Set()).join(",") === "0,1");
@@ -310,6 +316,7 @@ function receiptChange(paid: number): ItemChange {
   check("invariants: an exact price on an unconfirmed line is flagged", exact.some((issue) => issue.code === "exact-without-identity"));
   check("condition: undamaged stays good", asCondition("undamaged") === "good" && asCondition("no damage") === "good");
   check("condition: not new is not recorded as new", asCondition("not new") !== "new" && asCondition("brand new") === "new");
+  check("condition: original packaging with no damage is new", asCondition("unopened original box") === "new" && asCondition("excellent") === "good");
 
   const chipped = shapeWalkthrough(
     { rooms: [{ title: "Kitchen", items: [{ name: "Mug", category: "dishes", condition: "damaged", damage: "chip on the rim", damageSeverity: "minor", seenReplacementUsd: 12 }] }] },
@@ -328,6 +335,88 @@ function receiptChange(paid: number): ItemChange {
     [],
   ).rooms.flatMap((entry) => entry.items)[0];
   check("brand: a likely brand does not settle the model", guessed?.identitySettled === false && guessed?.likelyBrand?.name === "Nike");
+  const brandOnly = shapeWalkthrough(
+    { rooms: [{ title: "Kitchen", items: [{ name: "Range", category: "appliance", brand: "Cafe", identitySettled: true, seenReplacementUsd: 4000 }] }] },
+    [],
+    [],
+  ).rooms.flatMap((entry) => entry.items)[0];
+  const numbered = shapeWalkthrough(
+    { rooms: [{ title: "Kitchen", items: [{ name: "Range", category: "appliance", brand: "Cafe", markings: "CGS700P2MS", seenReplacementUsd: 4000 }] }] },
+    [],
+    [],
+  ).rooms.flatMap((entry) => entry.items)[0];
+  check("identity: a brand without a model number is not settled", brandOnly?.identitySettled === false && brandOnly?.brand === "Cafe");
+  check("identity: a model number settles the line", numbered?.identitySettled === true && numbered?.markings === "CGS700P2MS");
+  const namedModel = shapeWalkthrough(
+    { rooms: [{ title: "Kitchen", items: [{ name: "Cafe range", category: "appliance", brand: "Cafe", markings: "30-inch gas range", seenReplacementUsd: 4000 }] }] },
+    [],
+    [],
+  ).rooms.flatMap((entry) => entry.items)[0];
+  const mug = shapeWalkthrough(
+    { rooms: [{ title: "Desk", items: [{ name: "Coffee mug with a drink", category: "other", itemType: "mug", description: "coffee in a mug", seenReplacementUsd: 4 }] }] },
+    [],
+    [],
+  );
+  const boxes = shapeWalkthrough(
+    {
+      rooms: [
+        {
+          title: "Garage",
+          items: [
+            { name: "Storage boxes", category: "other", itemType: "storage box", size: "medium", count: 4, seenReplacementUsd: 12 },
+            { name: "Storage boxes", category: "other", itemType: "storage box", size: "large", count: 2, seenReplacementUsd: 18 },
+          ],
+        },
+      ],
+    },
+    [],
+    [],
+  ).rooms[0]?.items ?? [];
+  check("identity: a model name with the brand is enough", namedModel?.identitySettled === true && namedModel.markings === "30-inch gas range");
+  check("property: a drink in a mug is not listed", mug.rooms.every((room) => room.items.length === 0));
+  check("property: boxes of different sizes stay apart", boxes.length === 2 && boxes.some((line) => line.size === "medium" && line.count === 4));
+  const decor = shapeWalkthrough(
+    { rooms: [{ title: "Living room", items: [{ name: "Decor bowl", category: "other", itemType: "decor", count: 3, seenReplacementUsd: 12 }] }] },
+    [],
+    [],
+  ).rooms[0]?.items ?? [];
+  check("decor: each piece is its own line", decor.length === 3 && decor.every((line) => line.count === 1));
+  const plates = shapeWalkthrough(
+    {
+      rooms: [
+        {
+          title: "Kitchen",
+          items: [
+            { name: "Dinner plates", category: "dishes", itemType: "dinner plates", count: 12, seenReplacementUsd: 8 },
+            { name: "Wine glasses", category: "dishes", itemType: "wine glasses", count: 8, seenReplacementUsd: 6 },
+            { name: "Sterling flatware set", category: "silverware", itemType: "sterling flatware", count: 1, seenReplacementUsd: 900 },
+          ],
+        },
+      ],
+    },
+    [],
+    [],
+  ).rooms[0]?.items ?? [];
+  check(
+    "bulk: plates and glasses stay one counted line each, named Various",
+    plates.length === 3 &&
+      plates.some((line) => line.name === "Various dinner plates" && line.count === 12 && line.grouped) &&
+      plates.some((line) => line.name === "Various wine glasses" && line.count === 8) &&
+      plates.some((line) => line.name === "Sterling flatware set" && !line.grouped),
+  );
+  check("property: a coffee table is still listed", !isNotProperty("Coffee table", "table", "wood") && modelRecognized("Cafe", "30-inch gas range") && !modelRecognized("Samsung", null));
+  const receiptLine = item({ userValueUsd: 900, changes: [{ id: "c", at: "2026-11-01T00:00:00.000Z", source: "receipt photo", evidenceRef: null, before: {}, after: { userValueUsd: 900 } }] });
+  const numberedPhone = item({ brand: "Apple", markings: "iPhone 17 Pro", identitySettled: true, priceUsd: 1199, options: [] });
+  const namedRange = item({ brand: "Cafe", markings: "French-door refrigerator", identitySettled: true, priceUsd: 4000, options: [] });
+  const similar = item({ brand: "Cafe", markings: "gas range", identitySettled: false, priceUsd: 4000, options: [], detail: "Likely model" });
+  const unsure = item({ brand: "Apple", markings: null, identitySettled: false, priceUsd: 800, options: [{ label: "iPhone 17 Pro", lowUsd: 1100, highUsd: 1200 }, { label: "iPhone 16", lowUsd: 800, highUsd: 900 }] });
+  check("confidence: a receipt is 99", lineConfidence(receiptLine).percent === 99 && lineConfidence(receiptLine).assessed);
+  check("confidence: a model number is 95", lineConfidence(numberedPhone).percent === 95);
+  check("confidence: a model name is 90", lineConfidence(namedRange).percent === 90);
+  check("confidence: one similar model is 75", lineConfidence(similar).percent === 75 && lineConfidence(similar).assessed);
+  check("confidence: two versions wait for a receipt", lineConfidence(unsure).percent === 60 && lineConfidence(unsure).needsReceipt && !lineConfidence(unsure).assessed);
+  check("price: a stated price holds an outrageous comparable", heldNearPaid(100, 10000, null).price === 400);
+  check("price: a formal appraisal may sit above the price paid", heldNearPaid(100, 10000, 8000).price === 8000);
 
   const pricedSofa = item({
     id: "sofa",
@@ -565,6 +654,81 @@ function receiptChange(paid: number): ItemChange {
     repriced?.category === "electronics" && repriced.usefulLifeYears === 5 && repriced.cashValueUsd === 200,
     `${repriced?.usefulLifeYears} ${repriced?.cashValueUsd}`,
   );
+}
+
+// House study: a 2,600 sq ft walk, priced before any receipt, with jewelry left out of the $250 check.
+{
+  const sofa = item({ id: "sofa", name: "Sofa", category: "furniture", priceUsd: 480, sightings: [{ clipId: "c1", atSec: 4 }] });
+  const lamp = item({ id: "lamp", name: "Lamp", category: "other", priceUsd: 40, changes: [{ id: "ch", at: "2026-11-01T00:00:00.000Z", source: "receipt photo", evidenceRef: null, before: {}, after: {} }], sightings: [{ clipId: "c1", atSec: 8 }] });
+  const ghost = item({ id: "ghost", name: "Phantom chair", category: "furniture", priceUsd: 300, sightings: [{ clipId: "c2", atSec: 2 }] });
+  const inventory = {
+    rooms: room([sofa, lamp, ghost]),
+    clips: [{ durationMs: 120_000 }, { durationMs: 60_000 }],
+  } as Parameters<typeof scoreHouseWalk>[0];
+  const score = scoreHouseWalk(inventory, [
+    { name: "Sofa", count: 1, brand: null, model: null, replacementUsd: 400, category: "furniture", inVideo: true },
+    { name: "Grill", count: 1, brand: null, model: null, replacementUsd: 300, category: "appliance", inVideo: true },
+    { name: "Ring", count: 1, brand: null, model: null, replacementUsd: 800, category: "jewelry", inVideo: true },
+    { name: "Lamp", count: 1, brand: null, model: null, replacementUsd: 40, category: "other", inVideo: true },
+    { name: "Phantom chair", count: 1, brand: null, model: null, replacementUsd: 300, category: "furniture", inVideo: false },
+  ]);
+  check("study: filmed time is the clips", score.filmedMinutes === 3);
+  check("study: a receipt price is not in the before-connections check", score.priceChecked === 1 && score.priceWithinBand === 1);
+  check("study: a $300 grill that was not listed is missed, and a ring is not", score.missedOver250.join(",") === "Grill" && score.recoverChecked === 2);
+  check("study: a visible item that is absent is missing", score.missing.includes("Grill") && score.missing.includes("Ring"));
+  check("study: an item the video does not show is a false capture", score.falseCaptures.join(",") === "Phantom chair");
+  check("study: two walks do not yet set a new-user time", newUserMinutes([12, 14]) === null);
+  check("study: three walks set the average", newUserMinutes([12, 14, 16]) === 14 && HOUSE_STUDY.livingSqFt === 2600);
+}
+
+{
+  const shared = [
+    { roomTitle: "Living room", seenAt: [0] },
+    { roomTitle: "Living room", seenAt: [0] },
+    { roomTitle: "Living room", seenAt: [6] },
+  ];
+  clearSharedSightings(shared);
+  check("frames: two lines that share the opening second do not keep it", shared[0]?.seenAt.length === 0 && shared[1]?.seenAt.length === 0);
+  check("frames: a line with its own second keeps it", shared[2]?.seenAt[0] === 6);
+}
+
+{
+  const kept = item({ id: "keep", name: "Sofa", priceUsd: 100, cashValueUsd: 80, hidden: false });
+  const held = item({ id: "held", name: "Lamp", priceUsd: 500, cashValueUsd: 400, hidden: true });
+  const report = { title: "House", homeAddress: "1 Main", addressRegion: "us", addressPoint: null, place: null, locationCheck: null, recordHash: null, items: [], clips: [], rooms: room([kept, held]) } as unknown as HomeInventory;
+  const csv = inventoryCsv(report);
+  check("report: a hidden line is left out of the total and the file", replacementTotal(report) === 100 && csv.includes("Sofa") && !csv.includes("Lamp"));
+}
+
+{
+  // The hand-walked baseline from 2026-11-03 and the workbook's acceptance cases.
+  const rooms = roomTotals();
+  const low = EXPECTED.reduce((sum, entry) => sum + entry.ownerLowUsd, 0);
+  const high = EXPECTED.reduce((sum, entry) => sum + entry.ownerHighUsd, 0);
+  check("scorecard: 40 entries normalize to 60 units", EXPECTED.length === SCORECARD_BASELINE.entries && expectedUnits() === SCORECARD_BASELINE.units);
+  check("scorecard: the seven counting rules are stated", COUNTING_RULES.length === 7 && SCORECARD_BASELINE.walkedOn === "2026-11-03");
+  check("scorecard: owner totals match the workbook", low === SCORECARD_BASELINE.ownerTotalLowUsd && high === SCORECARD_BASELINE.ownerTotalHighUsd);
+  check(
+    "scorecard: room totals match the workbook",
+    rooms.get("Front entrance")?.units === 17 && rooms.get("Bedroom 1")?.units === 19 && rooms.get("Hallway")?.units === 16 && rooms.get("Gym")?.units === 8,
+  );
+  const base = { duplicateUnits: 0, phantomUnits: 0, improperInclusionUnits: 0, unresolvedUnits: 0, notExposedUnits: 0 };
+  const perfect = scoreRun({ ...base, correct: allCorrect(), includedUnits: 60 });
+  check("scorecard: 60 correct and no extras is 100% and PASS", perfect.status === "scored" && perfect.matchScore === 100 && perfect.result === "PASS");
+  const improper = scoreRun({ ...base, correct: allCorrect(), improperInclusionUnits: 1, includedUnits: 61 });
+  check("scorecard: one improper inclusion is 98.4%, capture 100%, needs work", improper.status === "scored" && improper.matchScore === 98.4 && improper.captureRate === 100 && improper.result === "Needs work");
+  const oneMissing = scoreRun({ ...base, correct: { ...allCorrect(), 30: 0 }, includedUnits: 59 });
+  check("scorecard: one missing is 98.3% and names the miss", oneMissing.status === "scored" && oneMissing.matchScore === 98.3 && oneMissing.missedIds.join(",") === "30");
+  const missAndDup = scoreRun({ ...base, correct: { ...allCorrect(), 30: 0 }, duplicateUnits: 1, includedUnits: 60 });
+  check("scorecard: one missing plus one duplicate is 96.7%", missAndDup.status === "scored" && missAndDup.matchScore === 96.7);
+  const pending = scoreRun({ ...base, correct: allCorrect(), unresolvedUnits: 1, includedUnits: 60 });
+  check("scorecard: an unresolved decision withholds the score", pending.status === "pending");
+  const unreconciled = scoreRun({ ...base, correct: allCorrect(), includedUnits: 61 });
+  check("scorecard: an included count that does not reconcile is rejected", unreconciled.status === "invalid");
+  const over = scoreRun({ ...base, correct: { ...allCorrect(), 6: 6 }, includedUnits: 61 });
+  check("scorecard: crediting above the target is rejected", over.status === "invalid");
+  const empty = scoreRun({ ...base, correct: {}, includedUnits: 0 });
+  check("scorecard: an empty output is 0% with no precision", empty.status === "scored" && empty.matchScore === 0 && empty.precision === null && empty.falseNegatives === 60);
 }
 
 console.log(failures === 0 ? "\nHarness: all checks passed." : `\nHarness: ${failures} check(s) failed.`);

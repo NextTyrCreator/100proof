@@ -63,6 +63,8 @@ The eval scores a recorded case. A live test measures the work: how long it take
 | First clip to last change | Upper bound on time to a reviewable file; includes waiting |
 | Model calls | From `cost_ledger`: calls, failures, median latency, and audio minutes per call type, and the transcription cost |
 
+A repeated walk of one 2,600 sq ft house, both yards, the hand-inventory baseline, and the before-connections price and over-$250 checks are `docs/HOUSE_STUDY.md`.
+
 ### Checklist for one session
 
 1. Open the phone tunnel URL in Safari or Chrome. Sign in with the email code.
