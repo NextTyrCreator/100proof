@@ -42,9 +42,13 @@ type InventoryContextValue = {
   inventories: HomeInventory[];
   selected: HomeInventory | null;
   saveState: SaveState;
+  processingIds: string[];
+  markProcessing: (id: string, on: boolean) => void;
+  listReady: boolean;
+  deleteInventory: (id: string) => Promise<boolean>;
   startInventory: () => void;
   selectInventory: (id: string) => void;
-  loadInventory: (id: string) => Promise<void>;
+  loadInventory: (id: string) => Promise<boolean>;
   setInventoryTitle: (id: string, title: string) => void;
   setAddressRegion: (id: string, regionId: string) => void;
   setHomeAddress: (id: string, address: string) => void;
@@ -110,6 +114,8 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
   const [inventories, setInventories] = useState<HomeInventory[]>(() => [blankInventory(crypto.randomUUID(), 1)]);
   const [selectedId, setSelectedId] = useState<string | null>(() => inventories[0]?.id ?? null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [processingIds, setProcessingIds] = useState<string[]>([]);
+  const [listReady, setListReady] = useState(false);
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
   const inventoriesRef = useRef(inventories);
@@ -120,6 +126,7 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
   const pendingEventsRef = useRef(new Map<string, ItemEvent[]>());
   const savingRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
+  const loadingRef = useRef(new Map<string, Promise<boolean>>());
   const supabaseRef = useRef<ReturnType<typeof createBrowserSupabase> | null>(null);
 
   const markDirty = useCallback((id: string) => {
@@ -133,22 +140,35 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const fetchList = useCallback(async () => {
-    const response = await fetch("/api/inventories", { cache: "no-store" });
-    if (!response.ok) return;
-    const parsed = listResponseSchema.safeParse(await response.json().catch(() => null));
-    if (!parsed.success) return;
-    orgIdRef.current = parsed.data.orgId;
-    setInventories((current) => {
-      const known = new Set(current.map((inventory) => inventory.id));
-      const fresh = parsed.data.inventories.filter((entry) => !known.has(entry.id)).map(fromListEntry);
-      if (fresh.length === 0) return current;
-      const savedTop = fresh.reduce((max, inventory) => Math.max(max, inventory.number), 0);
-      return [...current, ...fresh].map((inventory) =>
-        inventory.savedVersion === 0 && inventory.clips.length === 0 && inventory.number <= savedTop
-          ? { ...inventory, number: savedTop + 1 }
-          : inventory,
-      );
-    });
+    try {
+      const collected: z.infer<typeof listResponseSchema>["inventories"] = [];
+      let cursor: { before: string; beforeId: string } | null = null;
+      let orgId = "";
+      for (let page = 0; page < 10; page += 1) {
+        const query = cursor ? `?before=${encodeURIComponent(cursor.before)}&beforeId=${cursor.beforeId}` : "";
+        const response = await fetch(`/api/inventories${query}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const parsed = listResponseSchema.safeParse(await response.json().catch(() => null));
+        if (!parsed.success) return;
+        orgId = parsed.data.orgId;
+        collected.push(...parsed.data.inventories);
+        if (!parsed.data.next) break;
+        cursor = parsed.data.next;
+      }
+      orgIdRef.current = orgId;
+      const serverIds = new Set(collected.map((entry) => entry.id));
+      setInventories((current) => {
+        const locals = current.filter((inventory) => inventory.savedVersion === 0 && !serverIds.has(inventory.id));
+        const fromServer = collected.map((entry) => {
+          const existing = current.find((inventory) => inventory.id === entry.id);
+          if (!existing) return fromListEntry(entry);
+          return { ...existing, title: existing.title || entry.title, coverUrl: entry.coverUrl || existing.coverUrl, sealedAt: entry.sealedAt };
+        });
+        return [...locals, ...fromServer];
+      });
+    } finally {
+      setListReady(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -249,6 +269,21 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
       inventories,
       selected,
       saveState,
+      processingIds,
+      listReady,
+      deleteInventory: async (id) => {
+        dirtyRef.current.delete(id);
+        pendingEventsRef.current.delete(id);
+        const response = await fetch(`/api/inventories/${id}`, { method: "DELETE" });
+        if (!response.ok) return false;
+        setInventories((current) => current.filter((inventory) => inventory.id !== id));
+        setSelectedId((current) => (current === id ? null : current));
+        setProcessingIds((current) => current.filter((entry) => entry !== id));
+        return true;
+      },
+      markProcessing: (id, on) => {
+        setProcessingIds((current) => (on ? (current.includes(id) ? current : [...current, id]) : current.filter((entry) => entry !== id)));
+      },
       startInventory: () => {
         const id = crypto.randomUUID();
         setInventories((current) => {
@@ -258,15 +293,28 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
         setSelectedId(id);
       },
       selectInventory: (id) => setSelectedId(id),
-      loadInventory: async (id) => {
+      loadInventory: (id) => {
         const existing = inventoriesRef.current.find((inventory) => inventory.id === id);
-        if (existing?.loaded) return;
-        const response = await fetch(`/api/inventories/${id}`, { cache: "no-store" });
-        if (!response.ok) return;
-        const loaded = fromLoaded(await response.json().catch(() => null));
-        if (!loaded) return;
-        for (const room of loaded.rooms) for (const item of room.items) for (const entry of item.changes) loggedRef.current.add(entry.id);
-        setInventories((current) => current.map((inventory) => (inventory.id === id ? loaded : inventory)));
+        if (existing?.loaded) return Promise.resolve(true);
+        const pending = loadingRef.current.get(id);
+        if (pending) return pending;
+        const job = (async () => {
+          try {
+            const response = await fetch(`/api/inventories/${id}`, { cache: "no-store" });
+            if (!response.ok) return false;
+            const loaded = fromLoaded(await response.json().catch(() => null));
+            if (!loaded) return false;
+            for (const room of loaded.rooms) for (const item of room.items) for (const entry of item.changes) loggedRef.current.add(entry.id);
+            setInventories((current) => current.map((inventory) => (inventory.id === id ? loaded : inventory)));
+            return true;
+          } catch {
+            return false;
+          } finally {
+            loadingRef.current.delete(id);
+          }
+        })();
+        loadingRef.current.set(id, job);
+        return job;
       },
       setInventoryTitle: (id, title) => {
         const parsed = titleSchema.safeParse(title);
@@ -436,7 +484,7 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
         }
       },
     };
-  }, [inventories, selectedId, saveState, markDirty, queueEvent, fetchList]);
+  }, [inventories, selectedId, saveState, processingIds, listReady, markDirty, queueEvent, fetchList]);
 
   return <InventoryContext.Provider value={value}>{children}</InventoryContext.Provider>;
 }

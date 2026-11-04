@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useAudience } from "./Audience";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useAudience, type Audience } from "./Audience";
 import { InsurerInquiry } from "./InsurerInquiry";
 import { InventoryDocument } from "./InventoryDocument";
 
@@ -36,27 +36,37 @@ function clearPending() {
   sessionStorage.removeItem(PENDING_KEY);
 }
 
-export function LoginGate({ email }: { email: string | null }) {
+export function LoginGate({ email, startAs }: { email: string | null; startAs: Audience }) {
   const { audience, setAudience } = useAudience();
+  const [settled, setSettled] = useState(false);
 
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("for") === "providers") setAudience("provider");
-  }, [setAudience]);
+  useLayoutEffect(() => {
+    setAudience(startAs);
+    setSettled(true);
+  }, [startAs, setAudience]);
 
   if (email) return <InventoryDocument />;
 
-  if (audience === "provider") {
-    return (
-      <div className="narrow login is-provider">
-        <AudienceSwitch />
-        <InsurerInquiry />
-      </div>
-    );
-  }
+  const shown = settled ? audience : startAs;
 
   return (
+    <div key={shown} className="view-enter">
+      {shown === "provider" ? <ProviderScreen /> : <InsuredScreen />}
+    </div>
+  );
+}
+
+function ProviderScreen() {
+  return (
+    <div className="narrow login is-provider">
+      <InsurerInquiry />
+    </div>
+  );
+}
+
+function InsuredScreen() {
+  return (
     <div className="narrow login" style={{ "--lead": LEAD.length } as React.CSSProperties}>
-      <AudienceSwitch />
       <h1>
         <span className="sr-only">Most people are underinsured. Don&apos;t be like them.</span>
         <span className="login-letters" aria-hidden="true">
@@ -87,27 +97,6 @@ export function LoginGate({ email }: { email: string | null }) {
         </p>
         <EmailLogin />
       </div>
-    </div>
-  );
-}
-
-/** On a phone the audience tabs live in the menu, so the choice is repeated on the page. */
-function AudienceSwitch() {
-  const { audience, setAudience } = useAudience();
-
-  function choose(next: "insured" | "provider") {
-    setAudience(next);
-    window.history.replaceState(null, "", next === "provider" ? "/?for=providers" : "/");
-  }
-
-  return (
-    <div className="audience-switch" role="group" aria-label="Who this is for">
-      <button type="button" aria-pressed={audience === "insured"} onClick={() => choose("insured")}>
-        For insured
-      </button>
-      <button type="button" aria-pressed={audience === "provider"} onClick={() => choose("provider")}>
-        For providers
-      </button>
     </div>
   );
 }
@@ -449,7 +438,7 @@ function EmailLogin() {
               </svg>
             )}
           </button>
-          <p className="hint login-next">Instant 6-digit code · No password · Free to start</p>
+          <p className="hint login-next">Free to start</p>
           {visibleError ? (
             <p className="form-error" role="alert">
               {visibleError}

@@ -1,29 +1,30 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  cashValueTotal,
   enteredTotal,
   formatClock,
   formatMoney,
   formatWhen,
-  cashValueTotal,
-  replacementTotal,
   inventoryCsv,
   inventoryLabel,
   locationWithin,
   proofText,
+  replacementTotal,
   videoExtension,
   type HomeInventory,
   type ScanClip,
 } from "../lib/inventory";
+import { assessedReplacement } from "../lib/line-confidence";
 import { addressRegionLabel } from "../lib/address-search";
-import { unresolvedCount } from "../lib/evidence-requests";
 import { downloadJson } from "../lib/inventory-export";
 import { AddressLine } from "./AddressLine";
 import { useInventory } from "./InventoryProvider";
 import { InventoryMeasures } from "./InventoryMeasures";
 import { ItemizedRooms } from "./ItemizedRooms";
+import { Loader } from "./Loader";
 
 function downloadProof(inventory: HomeInventory) {
   const blob = new Blob([inventoryCsv(inventory)], { type: "text/csv;charset=utf-8" });
@@ -45,19 +46,19 @@ function downloadVideo(clip: ScanClip, index: number) {
 const steps = [
   {
     title: "Start",
-    body: "Click new scan and enter the property address.",
+    body: "Enter the property address, then walk the rooms with your phone.",
   },
   {
     title: "Record",
-    body: "Record up to 10 minutes, in 30-second clips. Talk as you go: the room, the brand, the year, what you paid.",
+    body: "Film up to 15 minutes. Hold the camera on a brand, model number, or serial label. A label you can read is what makes that line accurate.",
   },
   {
     title: "Recognize",
-    body: "Rooms, quantities, brands, and serials. Add a photo, a price paid, or a receipt to any line.",
+    body: "The walk comes back as rooms and counts. A brand, model, or serial read from the video stays on that line.",
   },
   {
     title: "Proof",
-    body: "Download the inventory, submit it to your insurer and cover your assets properly. Coverage stays with the carrier.",
+    body: "Download the inventory when it is ready. After you submit, open a line and take a picture of the receipt, or upload one. The receipt updates that value. Coverage stays with the carrier.",
   },
 ];
 
@@ -69,6 +70,20 @@ function mailHref(inventory: HomeInventory) {
 
 function createdOn(inventory: HomeInventory) {
   return inventory.sealedAt ?? inventory.clips[0]?.startedAt ?? inventory.createdAt;
+}
+
+function listFacts(inventory: HomeInventory) {
+  const when = createdOn(inventory);
+  const facts: string[] = [];
+  if (when) facts.push(formatWhen(when));
+  if (inventory.loaded) {
+    const items = inventory.rooms.reduce(
+      (sum, room) => sum + room.items.filter((item) => !item.hidden).reduce((count, item) => count + item.count, 0),
+      0,
+    );
+    if (items > 0) facts.push(`${items} ${items === 1 ? "item" : "items"}`);
+  }
+  return facts.join(" · ");
 }
 
 const SAVE_LINES = {
@@ -94,10 +109,19 @@ export function InventoryDocument() {
     applyEvidence,
     skipRequest,
     saveMedia,
+    processingIds,
+    listReady,
+    deleteInventory,
   } = useInventory();
   const [openId, setOpenId] = useState<string | null>(null);
   const [openedId, setOpenedId] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const deletingRef = useRef<string | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [openStep, setOpenStep] = useState<number | null>(null);
   const saved = inventories.filter((inventory) => inventory.savedVersion !== 0 || inventory.clips.length > 0);
   const opened = saved.find((inventory) => inventory.id === openedId) ?? null;
   const clips = opened?.clips ?? [];
@@ -116,8 +140,13 @@ export function InventoryDocument() {
   function openSaved(inventory: HomeInventory) {
     selectInventory(inventory.id);
     setSummaryOpen(false);
-    setOpenedId((current) => (current === inventory.id ? null : inventory.id));
-    if (!inventory.loaded) void loadInventory(inventory.id);
+    setLoadError("");
+    setOpenedId(inventory.id);
+    if (!inventory.loaded) {
+      void loadInventory(inventory.id).then((ok) => {
+        if (!ok) setLoadError("This inventory did not open. Try it again.");
+      });
+    }
   }
 
   function filmFocus(inventoryId: string, itemIds: string[]) {
@@ -150,64 +179,227 @@ export function InventoryDocument() {
     window.location.href = mailHref(opened);
   }
 
-  return (
-    <div className="narrow">
-      <h1 className="inventory-title">My inventory</h1>
-      <ol className="steps">
-        {steps.map((step, index) => (
-          <li key={step.title}>
-            <span className="index">0{index + 1}</span>
-            <h2>{step.title}</h2>
-            <p>{step.body}</p>
-          </li>
-        ))}
-      </ol>
-      <div className="inventory-toolbar">
-        <button type="button" className="button brand" onClick={newScan}>
-          New scan
-        </button>
+  const returning = saved.length > 0;
+
+  if (!listReady) {
+    return (
+      <div className="narrow inventory-loading" aria-busy="true">
+        <Loader size={72} layout="inline" />
       </div>
-      {saved.length > 0 ? (
-        <ul className="inventory-picks">
-          {saved.map((inventory) => {
-            const cover = inventory.clips[0]?.posterUrl || inventory.coverUrl;
-            const when = createdOn(inventory);
-            const stillOpen = inventory.loaded ? unresolvedCount(inventory.rooms) : 0;
-            return (
-              <li key={inventory.id}>
-                <button
-                  type="button"
-                  className="inventory-pick"
-                  aria-pressed={inventory.id === openedId}
-                  onClick={() => openSaved(inventory)}
-                >
-                  <span className="inventory-pick-photo">
-                    {cover ? (
-                      // The still is a frame from the scan kept with this inventory.
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={cover} alt="" loading="lazy" />
+    );
+  }
+
+  return (
+    <div className="narrow view-enter">
+      {opened ? (
+        <button type="button" className="text-button inventory-back" onClick={() => setOpenedId(null)}>
+          All inventories
+        </button>
+      ) : (
+        <>
+          <div className="inventory-heading">
+            <h1 className="inventory-title">My inventory</h1>
+            {returning ? (
+              <button type="button" className="button inventory-new" onClick={newScan}>
+                <span aria-hidden="true">+</span>
+                New
+              </button>
+            ) : null}
+          </div>
+          {returning ? null : (
+            <div className="first-inventory">
+              <p className="first-inventory-lead">One walk through the house. A clear label makes the list more accurate.</p>
+              <ol className="steps">
+                {steps.map((step, index) => {
+                  const open = openStep === index;
+                  return (
+                    <li key={step.title} className={open ? "is-open" : undefined}>
+                      <button
+                        type="button"
+                        className="step-tab"
+                        aria-expanded={open}
+                        aria-controls="step-detail"
+                        onClick={() => setOpenStep(open ? null : index)}
+                      >
+                        <span className="index">0{index + 1}</span>
+                        <span className="step-title">{step.title}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+              <div
+                className={openStep == null ? "step-detail" : "step-detail is-open"}
+                id="step-detail"
+                role="region"
+                aria-live="polite"
+              >
+                <div className="step-detail-body">
+                  {openStep != null ? <p key={steps[openStep].title}>{steps[openStep].body}</p> : null}
+                </div>
+              </div>
+              <button type="button" className="button inventory-begin" onClick={newScan}>
+                Begin your first inventory now!
+              </button>
+            </div>
+          )}
+          {returning ? (
+            <>
+            <ul className="inventory-picks">
+              {[...saved]
+                .sort((a, b) => Number(processingIds.includes(b.id)) - Number(processingIds.includes(a.id)))
+                .map((inventory) => {
+                const cover = inventory.coverUrl || inventory.clips[0]?.posterUrl;
+                const facts = listFacts(inventory);
+                const saving = processingIds.includes(inventory.id);
+                const confirming = confirmDelete === inventory.id;
+                const deleting = deletingId === inventory.id;
+                return (
+                  <li key={inventory.id} className="inventory-card">
+                    <div className="inventory-row">
+                      <button
+                        type="button"
+                        className={saving ? "inventory-pick is-saving" : "inventory-pick"}
+                        disabled={saving}
+                        aria-disabled={saving}
+                        onClick={() => openSaved(inventory)}
+                        onPointerEnter={() => {
+                          if (!saving && !inventory.loaded) void loadInventory(inventory.id);
+                        }}
+                        onFocus={() => {
+                          if (!saving && !inventory.loaded) void loadInventory(inventory.id);
+                        }}
+                      >
+                        <span className="inventory-pick-photo">
+                          {cover ? (
+                            // The still is the highest priced item kept with this inventory.
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={cover} alt="" loading="lazy" />
+                          ) : (
+                            <span className="inventory-pick-empty" aria-hidden="true" />
+                          )}
+                        </span>
+                        <span className="inventory-pick-copy">
+                          <span className="inventory-pick-title">{inventoryLabel(inventory)}</span>
+                          {saving ? (
+                            <span className="inventory-saving">
+                              Scan will be completed soon
+                              <span className="saving-dots" aria-hidden="true">
+                                <i />
+                                <i />
+                                <i />
+                              </span>
+                            </span>
+                          ) : facts ? (
+                            <span className="inventory-pick-date">{facts}</span>
+                          ) : null}
+                        </span>
+                      </button>
+                      {saving ? null : (
+                        <button
+                          type="button"
+                          className="inventory-trash"
+                          aria-label={`Delete ${inventoryLabel(inventory)}`}
+                          onClick={() => {
+                            setDeleteError("");
+                            setConfirmDelete(inventory.id);
+                          }}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 7h16" />
+                            <path d="M9.5 7V5.5A1.5 1.5 0 0 1 11 4h2a1.5 1.5 0 0 1 1.5 1.5V7" />
+                            <path d="M7 7.5l.7 11.2A1.5 1.5 0 0 0 9.2 20h5.6a1.5 1.5 0 0 0 1.5-1.3L17 7.5" />
+                            <path d="M10 11v5.5M14 11v5.5" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                    {confirming ? (
+                      <div className="inventory-confirm">
+                        <p>Delete {inventoryLabel(inventory)}? This removes the inventory, its video, and its pictures from your account.</p>
+                        <div className="inventory-confirm-actions">
+                          <button
+                            type="button"
+                            className="text-button is-delete"
+                            disabled={deleting}
+                            aria-busy={deleting}
+                            onClick={() => {
+                              if (deletingRef.current) return;
+                              deletingRef.current = inventory.id;
+                              setDeleteError("");
+                              setDeletingId(inventory.id);
+                              void deleteInventory(inventory.id)
+                                .then((ok) => {
+                                  if (!ok) {
+                                    setDeleteError("This inventory did not delete.");
+                                    return;
+                                  }
+                                  if (openedId === inventory.id) setOpenedId(null);
+                                  setConfirmDelete(null);
+                                })
+                                .catch(() => {
+                                  setDeleteError("This inventory did not delete.");
+                                })
+                                .finally(() => {
+                                  deletingRef.current = null;
+                                  setDeletingId(null);
+                                });
+                            }}
+                          >
+                            {deleting ? (
+                              <span className="saving-dots on-delete" aria-label="Deleting">
+                                <i />
+                                <i />
+                                <i />
+                              </span>
+                            ) : (
+                              "Delete"
+                            )}
+                          </button>
+                          <button type="button" className="text-button" disabled={deleting} onClick={() => setConfirmDelete(null)}>
+                            Keep
+                          </button>
+                        </div>
+                      </div>
                     ) : null}
-                  </span>
-                  <span className="inventory-pick-copy">
-                    <span className="inventory-pick-title">{inventoryLabel(inventory)}</span>
-                    {when ? <span className="inventory-pick-date">{formatWhen(when)}</span> : null}
-                    {stillOpen > 0 ? <span className="inventory-pick-date">{stillOpen} still open</span> : null}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+            {deleteError ? <p className="form-error">{deleteError}</p> : null}
+            </>
+          ) : null}
+        </>
+      )}
       {opened && !opened.loaded ? (
-        <article className="sheet" aria-busy="true">
-          <p className="total-label">{inventoryLabel(opened)}</p>
-          <p className="hint">Opening this inventory.</p>
+        <article className="sheet scan-portal" aria-busy={loadError ? undefined : true}>
+          {opened.coverUrl ? (
+            // The cover is the still already shown on the list.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className="scan-portal-cover" src={opened.coverUrl} alt="" />
+          ) : (
+            <Loader size={72} layout="inline" />
+          )}
+          <h1 className="inventory-open-title">{inventoryLabel(opened)}</h1>
+          {loadError ? (
+            <>
+              <p className="form-error">{loadError}</p>
+              <button type="button" className="button quiet" onClick={() => openSaved(opened)}>
+                Try again
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="hint">Opening this inventory.</p>
+              <span className="scan-portal-bar" aria-hidden="true" />
+            </>
+          )}
         </article>
       ) : null}
       {opened && opened.loaded ? (
-      <article className="sheet">
-        <p className="total-label">{inventoryLabel(opened)}</p>
+      <article className="sheet inventory-open" key={opened.id}>
+        <h1 className="inventory-open-title">{inventoryLabel(opened)}</h1>
+        {listFacts(opened) ? <p className="inventory-open-facts">{listFacts(opened)}</p> : null}
         {addressRegionLabel(opened.addressRegion) ? (
           <p className="confirm-address">{addressRegionLabel(opened.addressRegion)}</p>
         ) : null}
@@ -217,7 +409,7 @@ export function InventoryDocument() {
         {clips.length > 0 ? (
           <details className="clip-fold">
             <summary>
-              <span>Source video</span>
+              <span>Walkthrough video</span>
               <span className="room-meta">
                 {clips.length} {clips.length === 1 ? "clip" : "clips"} · {formatClock(clips.reduce((sum, clip) => sum + clip.durationMs, 0))}
               </span>
@@ -252,10 +444,7 @@ export function InventoryDocument() {
                     ) : (
                       <p>This clip did not upload, so it is not on your account.</p>
                     )}
-                    <p>
-                      Recorded {formatWhen(clip.startedAt)}. The source video stays with this proof. Download it to
-                      this device as well.
-                    </p>
+                    <p>Recorded {formatWhen(clip.startedAt)}. Download a copy to this device if you want one.</p>
                     {clip.videoUrl ? (
                       <button type="button" className="button quiet" onClick={() => downloadVideo(clip, index)}>
                         Download video
@@ -337,10 +526,15 @@ export function InventoryDocument() {
       {opened && summaryOpen ? (
         <section className="sheet summary" id="summary">
           <p className="total-label">Summary</p>
-          <h1>Proof document</h1>
+          <h2>Proof document</h2>
           <p className="total-note">
-            Download the inventory, email it, or send it. 100proof does not decide coverage, and this file is not a
-            sworn proof of loss.
+            Download the inventory, email it, or send it. Lines at 75% or above are in the assessed value. A receipt is 99%. 100proof does not decide coverage, and this file is not a sworn proof of loss.
+          </p>
+          <p className="summary-total">
+            <span>Assessed value</span>
+            <span>
+              {formatMoney(assessedReplacement(opened.rooms.flatMap((room) => room.items)))}
+            </span>
           </p>
           <p className="summary-total">
             <span>Replacement estimate</span>

@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     const orgId = await personalOrg(supabase);
     let query = supabase
       .from("inventories")
-      .select("id, title, created_at, sealed_at, cover:document->>coverPath, number:document->number")
+      .select("id, title, created_at, sealed_at, cover:document->>coverPath, number:document->number, rooms:document->rooms")
       .eq("org_id", orgId)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
@@ -35,9 +35,17 @@ export async function GET(request: Request) {
     }
     const { data, error } = await query;
     if (error) throw error;
-    const rows = (data ?? []) as Array<{ id: string; title: string; created_at: string; sealed_at: string | null; cover: string | null; number: number | null }>;
+    const rows = (data ?? []) as Array<{
+      id: string;
+      title: string;
+      created_at: string;
+      sealed_at: string | null;
+      cover: string | null;
+      number: number | null;
+      rooms: unknown;
+    }>;
     const page = rows.slice(0, PAGE_SIZE);
-    const covers = page.map((row) => row.cover).filter((path): path is string => Boolean(path));
+    const covers = page.map((row) => highlightPath(row.rooms) ?? row.cover).filter((path): path is string => Boolean(path));
     const signed = new Map<string, string>();
     if (covers.length > 0) {
       const { data: urls } = await supabase.storage.from("evidence").createSignedUrls(covers, SIGNED_SECONDS);
@@ -54,11 +62,28 @@ export async function GET(request: Request) {
         createdAt: row.created_at,
         sealedAt: row.sealed_at,
         number: typeof row.number === "number" ? row.number : 1,
-        coverUrl: row.cover ? (signed.get(row.cover) ?? "") : "",
+        coverUrl: signed.get(highlightPath(row.rooms) ?? row.cover ?? "") ?? "",
       })),
       next: rows.length > PAGE_SIZE && last ? { before: last.created_at, beforeId: last.id } : null,
     });
   } catch {
     return NextResponse.json({ error: "Your inventories did not load." }, { status: 502 });
   }
+}
+
+function highlightPath(rooms: unknown) {
+  if (!Array.isArray(rooms)) return null;
+  let best: { price: number; path: string } | null = null;
+  for (const room of rooms) {
+    if (!room || typeof room !== "object" || !Array.isArray((room as { items?: unknown }).items)) continue;
+    for (const item of (room as { items: unknown[] }).items) {
+      if (!item || typeof item !== "object") continue;
+      const path = (item as { photoPath?: unknown }).photoPath;
+      if (typeof path !== "string" || !path) continue;
+      const price = Number((item as { priceUsd?: unknown }).priceUsd);
+      const amount = Number.isFinite(price) ? price : 0;
+      if (!best || amount > best.price) best = { price: amount, path };
+    }
+  }
+  return best?.path ?? null;
 }

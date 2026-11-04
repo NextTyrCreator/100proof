@@ -8,6 +8,9 @@
   --proof-surface: #ffffff;
   --proof-surface-soft: #f7f9fc;
   --proof-text-secondary: #5a6a7e;
+  /* Status marks only: hide a line, or flag one that still needs a receipt. Not for brand surfaces. */
+  --proof-hide: #d23b3b;
+  --proof-attention: #e08a00;
 
   --proof-gradient: linear-gradient(90deg, var(--proof-blue) 0%, var(--proof-cyan) 52%, var(--proof-teal) 100%);
 

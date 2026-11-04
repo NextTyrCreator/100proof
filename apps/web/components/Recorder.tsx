@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { addressRegionLabel } from "../lib/address-search";
 import { dataUrlBlob, sendEvidence } from "../lib/evidence-client";
+import { modelRecognized } from "../lib/review-shape";
 import { openRequests, type EvidenceRequest } from "../lib/evidence-requests";
 import { formatClock, locationWithin, sha256Hex, type SpokenLine } from "../lib/inventory";
 import { keptFromInventories, readKeptValues, rememberKeptValues } from "../lib/kept-values";
@@ -66,6 +67,20 @@ const reconcileResponseSchema = z.object({
     .max(100)
     .optional()
     .catch(undefined),
+  marks: z
+    .array(
+      z.object({
+        id: z.string().max(80),
+        brand: z.string().max(80).nullable().optional(),
+        markings: z.string().max(160).nullable().optional(),
+        serial: z.string().max(80).nullable().optional(),
+        color: z.string().max(40).nullable().optional(),
+        detail: z.string().max(400).nullable().optional(),
+      }),
+    )
+    .max(100)
+    .optional()
+    .catch(undefined),
 });
 
 const PRICE_BATCH = 30;
@@ -87,6 +102,20 @@ function grabFrame(video: HTMLVideoElement, quality = 0.72) {
   if (!context || canvas.width === 0) return "";
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL("image/jpeg", quality);
+}
+
+function grabStill(video: HTMLVideoElement) {
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  if (!width || !height) return Promise.resolve(null);
+  const scale = Math.min(1, 1280 / width);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  const context = canvas.getContext("2d");
+  if (!context) return Promise.resolve(null);
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise<Blob | null>((resolve) => canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.82));
 }
 
 function lineCount(review: ReviewResult | null) {
@@ -111,6 +140,7 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
     updateClip,
     applyEvidence,
     skipRequest,
+    markProcessing,
   } = useInventory();
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -139,6 +169,8 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
   const closingRef = useRef<CloseReason | null>(null);
   const lastTickRef = useRef(0);
   const segmentStartedAtRef = useRef("");
+  const segmentIdRef = useRef("");
+  const stillsRef = useRef(new Map<string, { at: number; blob: Blob }[]>());
   const piecePosterRef = useRef("");
   const pausedAtRef = useRef(0);
   const hadClipsRef = useRef(false);
@@ -167,6 +199,59 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
       streamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
+
+  useEffect(() => {
+    const filming = phase === "recording" || phase === "paused";
+    document.body.classList.toggle("is-filming", filming);
+    return () => document.body.classList.remove("is-filming");
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "recording" && phase !== "paused") return;
+    let released = false;
+    let sentinel: { release: () => Promise<void> } | null = null;
+    const take = () => {
+      const locks = navigator.wakeLock;
+      if (!locks || released) return;
+      void locks
+        .request("screen")
+        .then((lock) => {
+          if (released) void lock.release();
+          else sentinel = lock;
+        })
+        .catch(() => undefined);
+    };
+    take();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") take();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      released = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      void sentinel?.release();
+    };
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "recording") return;
+    const timer = window.setInterval(() => {
+      const video = videoRef.current;
+      const id = segmentIdRef.current;
+      if (!video || !id) return;
+      const at = Math.floor(clockRef.current.clipMs / 1000);
+      const list = stillsRef.current.get(id) ?? [];
+      if (list.some((frame) => frame.at === at) || list.length >= 30) return;
+      void grabStill(video).then((blob) => {
+        if (!blob) return;
+        const current = stillsRef.current.get(id) ?? [];
+        if (current.some((frame) => frame.at === at) || current.length >= 30) return;
+        current.push({ at, blob });
+        stillsRef.current.set(id, current);
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [phase]);
 
   useEffect(() => {
     if (phase !== "recording") return;
@@ -300,6 +385,7 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
     combinedRef.current = shareKnownPrices(combinedRef.current);
     const { lines, idsByKey, descriptions } = linesToPrice(combinedRef.current, pricing.sent);
     if (lines.length === 0) return;
+    if (modeRef.current !== "done" && lines.length < 12) return;
     for (const description of descriptions) pricing.sent.add(description);
     pricing.running = true;
     void priceAll(lines, idsByKey).finally(() => {
@@ -316,11 +402,14 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
     const order = new Map(partsRef.current.map((piece, index) => [piece.id, index + 1]));
     const lines = reconcileInput(review, (id) => order.get(id)).slice(0, 300);
     if (lines.length === 0) return null;
+    const spoken = current.clips
+      .flatMap((clip, index) => clip.spoken.map((line) => ({ at: `Clip ${index + 1} ${formatClock(line.startMs)}`, text: line.text.slice(0, 160) })))
+      .slice(0, 80);
     try {
       const response = await fetch("/api/scan/reconcile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lines, inventoryId: current.id }),
+        body: JSON.stringify({ lines, spoken, inventoryId: current.id }),
       });
       if (!response.ok) return null;
       const parsed = reconcileResponseSchema.safeParse(await response.json().catch(() => null));
@@ -349,30 +438,45 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
       }
       return;
     }
+    savedToInventoryRef.current = true;
+    const review = combinedRef.current;
+    markProcessing(current.id, true);
     setScanReview(
       current.id,
-      combinedRef.current,
+      review,
       focusIds.length > 0 ? "focus" : hadClipsRef.current ? "append" : "replace",
       focusIds,
     );
-    rememberReview(combinedRef.current);
-    savedToInventoryRef.current = true;
-    const sealedAt = new Date().toISOString();
-    void sha256Hex(
-      JSON.stringify({
-        title: current.title.trim(),
-        country: addressRegionLabel(current.addressRegion),
-        address: current.homeAddress.trim(),
-        locatedAt: current.place?.capturedAt ?? null,
-        scanStartedAt: partsRef.current[0]?.startedAt ?? sealedAt,
-        durationMs: clockRef.current.recordedMs,
-        pieceHashes: hashesRef.current,
-        sealedAt,
-      }),
-    ).then((recordHash) => {
-      sealRecord(current.id, recordHash, sealedAt);
-      setPhase("reviewed");
-    });
+    router.push("/");
+    void (async () => {
+      try {
+        await stampStills(current.id, review);
+        await identifyHighValue(current.id, review);
+        setScanReview(
+          current.id,
+          review,
+          focusIds.length > 0 ? "focus" : hadClipsRef.current ? "append" : "replace",
+          focusIds,
+        );
+        rememberReview(review);
+        const sealedAt = new Date().toISOString();
+        const recordHash = await sha256Hex(
+          JSON.stringify({
+            title: current.title.trim(),
+            country: addressRegionLabel(current.addressRegion),
+            address: current.homeAddress.trim(),
+            locatedAt: current.place?.capturedAt ?? null,
+            scanStartedAt: partsRef.current[0]?.startedAt ?? sealedAt,
+            durationMs: clockRef.current.recordedMs,
+            pieceHashes: hashesRef.current,
+            sealedAt,
+          }),
+        );
+        sealRecord(current.id, recordHash, sealedAt);
+      } finally {
+        markProcessing(current.id, false);
+      }
+    })();
   }
 
   /** After Done: every clip listed and priced, then one repeat check, then the last prices. */
@@ -384,7 +488,7 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
     void (async () => {
       try {
         if (combinedRef.current && focusIds.length === 0) {
-          showProgress("Checking categories and repeats");
+          showProgress("Checking brands and repeats");
           const answer = await postReconcile(combinedRef.current);
           if (answer && combinedRef.current) combinedRef.current = applyReconcile(combinedRef.current, answer).review;
         }
@@ -411,6 +515,74 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
   }
 
   /** Fold finished clips into the session in clip order. */
+  function nearestStill(frames: { at: number; blob: Blob }[], atSec: number) {
+    let best: { at: number; blob: Blob } | null = null;
+    let gap = 3;
+    for (const frame of frames) {
+      const next = Math.abs(frame.at - atSec);
+      if (next < gap) {
+        best = frame;
+        gap = next;
+      }
+    }
+    return best?.blob ?? null;
+  }
+
+  async function stampStills(inventoryId: string, review: ReviewResult) {
+    const jobs: { item: ReviewResult["rooms"][number]["items"][number]; blob: Blob }[] = [];
+    for (const room of review.rooms) {
+      for (const item of room.items) {
+        if (item.photoPath) continue;
+        const sighting = item.sightings.find((entry) => entry.clipId && entry.atSec != null);
+        if (!sighting?.clipId || sighting.atSec == null) continue;
+        const blob = nearestStill(stillsRef.current.get(sighting.clipId) ?? [], sighting.atSec);
+        if (blob) jobs.push({ item, blob });
+      }
+    }
+    for (let index = 0; index < jobs.length; index += 4) {
+      await Promise.all(
+        jobs.slice(index, index + 4).map(async ({ item, blob }) => {
+          const stored = `${item.id.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}.jpg`;
+          const path = await saveMedia(inventoryId, stored, blob);
+          if (!path) return;
+          item.photoPath = path;
+          item.photoUrl = URL.createObjectURL(blob);
+        }),
+      );
+    }
+    stillsRef.current.clear();
+  }
+
+  async function identifyHighValue(inventoryId: string, review: ReviewResult) {
+    const current = selectedRef.current;
+    if (!current) return;
+    const targets = review.rooms
+      .flatMap((room) => room.items)
+      .filter((item) => !item.markings && (item.priceUsd ?? 0) > 250 && item.photoUrl?.startsWith("blob:"))
+      .slice(0, 6);
+    for (const item of targets) {
+      try {
+        const blob = await fetch(item.photoUrl ?? "").then((response) => response.blob());
+        const result = await sendEvidence({
+          kind: "label",
+          item,
+          image: blob,
+          answer: "",
+          address: current.homeAddress,
+          region: addressRegionLabel(current.addressRegion),
+          inventoryId,
+        });
+        if ("error" in result) continue;
+        if (result.patch.brand) item.brand = result.patch.brand;
+        if (result.patch.markings) item.markings = result.patch.markings;
+        if (result.patch.serial) item.serial = result.patch.serial ?? item.serial;
+        if (item.brand && item.markings) item.identitySettled = modelRecognized(item.brand, item.markings);
+      } catch {
+        // One item failing does not stop the file.
+      }
+    }
+  }
+
   function applyReady() {
     applyChainRef.current = applyChainRef.current.then(async () => {
       for (const index of readyInOrder(appliedCountRef.current, resultsRef.current)) {
@@ -485,6 +657,9 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
   function startRecorder() {
     const stream = recordStreamRef.current;
     if (!stream) return;
+    const segmentId = crypto.randomUUID();
+    segmentIdRef.current = segmentId;
+    stillsRef.current.set(segmentId, []);
     const recorder = makeRecorder(stream);
     chunksRef.current = [];
     segmentStartedAtRef.current = new Date().toISOString();
@@ -507,7 +682,7 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
       const audio = tapRef.current?.take() ?? null;
       if (blob.size > 1000) {
         partsRef.current.push({
-          id: crypto.randomUUID(),
+          id: segmentId,
           blob,
           audio,
           startedAt: segmentStartedAtRef.current,
@@ -778,7 +953,7 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
         ) : null}
       </div>
       {live ? (
-        <div className="preview">
+        <div className={phase === "starting" ? "preview" : "preview is-stage"}>
           <video ref={videoRef} muted autoPlay playsInline disablePictureInPicture />
           {phase === "starting" ? (
             <div className="preview-idle">
@@ -787,46 +962,48 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
           ) : null}
           {phase === "recording" ? <span className="rec-dot" aria-hidden="true" /> : null}
           <ScanGlance videoRef={videoRef} active={phase === "recording"} inventoryId={selected.id} lines={progress.lines} />
-        </div>
-      ) : null}
-      {live ? (
-        <>
-          <div className="clip-rail" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${slots}, 1fr)` }}>
-            {Array.from({ length: slots }, (_, index) => {
-              const start = index * CLIP_MS;
-              const amount = Math.min(1, Math.max(0, (clock.recordedMs - start) / CLIP_MS));
-              return (
-                <span className="clip-mark" key={index}>
-                  <span style={{ transform: `scaleX(${amount})` }} />
-                </span>
-              );
-            })}
-          </div>
-          <p className="record-time" aria-live="polite">
-            {phase === "recording"
-              ? `Clip ${clipNumber} · ${formatClock(clock.clipMs)} of 0:30 · ${formatClock(clock.recordedMs)} of ${formatClock(limitMs)}`
-              : `Paused · ${formatClock(clock.recordedMs)} of ${formatClock(limitMs)}`}
-          </p>
-        </>
-      ) : null}
-      {phase === "recording" ? (
-        <div className="record-controls">
-          <button type="button" className="button brand" onClick={() => closeClip("pause")}>
-            Pause
-          </button>
-          <button type="button" className="button quiet" onClick={() => closeClip("finish")}>
-            Done
-          </button>
-        </div>
-      ) : null}
-      {phase === "paused" ? (
-        <div className="record-controls">
-          <button type="button" className="button brand" onClick={resumeScan}>
-            Record
-          </button>
-          <button type="button" className="button quiet" onClick={() => closeClip("finish")}>
-            Done
-          </button>
+          {phase === "recording" || phase === "paused" ? (
+            <div className="film-bar">
+              <div className="clip-rail" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${slots}, 1fr)` }}>
+                {Array.from({ length: slots }, (_, index) => {
+                  const start = index * CLIP_MS;
+                  const amount = Math.min(1, Math.max(0, (clock.recordedMs - start) / CLIP_MS));
+                  return (
+                    <span className="clip-mark" key={index}>
+                      <span style={{ transform: `scaleX(${amount})` }} />
+                    </span>
+                  );
+                })}
+              </div>
+              <p className="record-time" aria-live="polite">
+                {phase === "recording"
+                  ? `Clip ${clipNumber} · ${formatClock(clock.clipMs)} of 0:30 · ${formatClock(clock.recordedMs)} of ${formatClock(limitMs)}`
+                  : `Paused · ${formatClock(clock.recordedMs)} of ${formatClock(limitMs)}`}
+              </p>
+              {phase === "recording" ? (
+                <button type="button" className="button brand" onClick={() => closeClip("pause")}>
+                  Pause
+                </button>
+              ) : (
+                <div className="film-actions">
+                  <button type="button" className="button brand" onClick={resumeScan}>
+                    Play
+                  </button>
+                  <button type="button" className="button quiet" onClick={() => closeClip("finish")}>
+                    Done
+                  </button>
+                </div>
+              )}
+              {phase === "paused" ? (
+                <p className="film-note">Play to continue, or Done to finish. After 15 minutes this sends what you have.</p>
+              ) : null}
+              {error ? (
+                <p className="film-note" role="alert">
+                  {error}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {phase === "reviewing" ? (
@@ -845,8 +1022,8 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
           </div>
         </div>
       ) : null}
-      {live && reviewing ? <p className="hint">{`Listed ${progress.listed} of ${progress.total} clips while you keep filming.`}</p> : null}
-      {live && liveAsk ? (
+      {phase === "paused" && reviewing ? <p className="hint">{`Listed ${progress.listed} of ${progress.total} clips.`}</p> : null}
+      {phase === "paused" && liveAsk ? (
         <div className="ask-live" role="status" aria-live="polite">
           <p className="ask-from">Clip {liveAsk.clip} asks</p>
           <p className="ask-prompt">{liveAsk.request.prompt}</p>
@@ -863,7 +1040,7 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
           </div>
         </div>
       ) : null}
-      {live && snapNote ? <p className="hint">{snapNote}</p> : null}
+      {phase === "paused" && snapNote ? <p className="hint">{snapNote}</p> : null}
       {phase === "reviewed" && selected ? (
         <>
           <ItemizedRooms
@@ -895,14 +1072,7 @@ export function Recorder({ onBack, focusIds = [] }: { onBack: () => void; focusI
           {phase === "starting" ? "Starting" : "Begin scan"}
         </button>
       ) : null}
-      {live ? (
-        <p className="hint">
-          {phase === "paused"
-            ? "Record to continue. If this sits for 15 minutes, the session sends what you have."
-            : "Name each room as you enter it. Say the brand, the year you bought it, and what you paid. A clip closes every 30 seconds."}
-        </p>
-      ) : null}
-      {error ? (
+      {error && phase !== "recording" && phase !== "paused" ? (
         <p className="form-error" role="alert">
           {error}
         </p>

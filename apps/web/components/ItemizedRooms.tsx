@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, Fragment } from "react";
 import { sendEvidence, type EvidenceSend } from "../lib/evidence-client";
 import { openRequests, SHOWN_AT_ONCE, type EvidenceRequest } from "../lib/evidence-requests";
 import {
@@ -16,7 +16,8 @@ import {
   type SaidFact,
 } from "../lib/inventory";
 import { accuracyMark, receiptVerified } from "../lib/accuracy-mark";
-import { keptLineSchema } from "../lib/review-shape";
+import { lineConfidence } from "../lib/line-confidence";
+import { isDecor, keptLineSchema } from "../lib/review-shape";
 import { rememberKeptValues } from "../lib/kept-values";
 import type { ItemPatch } from "../lib/inventory-merge";
 import { ClipFrame } from "./ClipFrame";
@@ -68,9 +69,32 @@ function shown(key: string, value: string | number | boolean | null) {
 }
 
 function heardLabel(fact: SaidFact) {
-  if (fact.heard === "typed") return "You answered";
-  if (fact.heard === "transcript") return "You said (transcribed)";
-  return "You said (heard by the video model)";
+  if (fact.heard === "typed") return "Answered on this line";
+  if (fact.heard === "transcript") return "Stated on the walkthrough";
+  return "Heard on the walkthrough";
+}
+
+function lineStory(item: RoomItem) {
+  const maker = item.brand
+    ? `The walkthrough supports ${item.brand}${item.markings ? `, ${item.markings}` : ""}, from the picture or from what was stated while this item was shown.`
+    : item.likelyBrand
+      ? `The picture points to a likely brand, ${item.likelyBrand.name}, and that brand is not confirmed. ${item.likelyBrand.clues}.`
+      : "No brand was identified. The picture did not show a maker, and none was stated for this item.";
+  const priced = item.valueBasis?.startsWith("Exact:")
+    ? `Replacement cost is the exact product. ${item.valueBasis.slice("Exact:".length).trim()}`
+    : item.valueBasis?.startsWith("Comparable:")
+      ? `Replacement cost is a comparable, because the exact product was not confirmed. ${item.valueBasis.slice("Comparable:".length).trim()}`
+      : item.priceUsd != null
+        ? "Replacement cost is an estimate for this kind of item. No brand was applied."
+        : "Replacement cost is not set yet.";
+  const cash =
+    item.cashValueUsd != null && item.priceUsd != null && item.cashValueUsd !== item.priceUsd
+      ? " Actual cash value is lower, for age and condition."
+      : "";
+  const next = receiptVerified(item)
+    ? " A receipt is already on this line."
+    : " If you have the receipt or anything more, add it here or connect the account. That is how this line can be verified another way.";
+  return `${maker} ${priced}${cash}${next}`;
 }
 
 type Chip = { label: string; tone: "verified" | "yours" | "exact" | "estimate" | "open" | "settled" };
@@ -80,10 +104,10 @@ function chipFor(item: RoomItem): Chip {
   if (item.enteredBy === "you") return { label: "Added by you", tone: "yours" };
   if (!item.countSettled) return { label: "Count open", tone: "open" };
   if (item.priceUsd == null) return { label: "No price yet", tone: "open" };
-  if (item.userValueUsd != null) return { label: "Price from you", tone: "yours" };
-  if (item.valueBasis?.startsWith("Exact:")) return { label: "Exact product", tone: "exact" };
-  if (!item.identitySettled) return { label: item.skipped.includes("label") ? "Estimate accepted" : "Estimated from video", tone: "estimate" };
-  return { label: "Settled on camera", tone: "settled" };
+  if (item.userValueUsd != null) return { label: "Amount paid", tone: "yours" };
+  if (item.valueBasis?.startsWith("Exact:")) return { label: "Exact replacement", tone: "exact" };
+  if (!item.identitySettled) return { label: item.skipped.includes("label") ? "Estimate accepted" : "Replacement estimated", tone: "estimate" };
+  return { label: "Identified on the walkthrough", tone: "settled" };
 }
 
 function initials(name: string) {
@@ -141,6 +165,7 @@ export function ItemizedRooms({
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [renaming, setRenaming] = useState("");
   const [confirmDelete, setConfirmDelete] = useState("");
+  const [lineFilter, setLineFilter] = useState<"all" | "attention" | "hidden">("all");
   const [addedName, setAddedName] = useState("");
   const [addedCount, setAddedCount] = useState("1");
   const [addedNote, setAddedNote] = useState("");
@@ -148,11 +173,17 @@ export function ItemizedRooms({
   const requests = useMemo(() => openRequests(rooms), [rooms]);
   const clipById = useMemo(() => new Map(clips.map((clip, index) => [clip.id, { clip, number: index + 1 }])), [clips]);
   const totals = useMemo(() => {
-    const lines = rooms.flatMap((room) => room.items);
+    const lines = rooms.flatMap((room) => room.items).filter((item) => !item.hidden);
     return {
       lines: lines.length,
       replacement: lines.reduce((sum, item) => sum + (item.priceUsd ?? 0) * item.count, 0),
       verified: lines.filter(receiptVerified).length,
+      assessed: lines.filter((item) => lineConfidence(item).assessed).length,
+      hidden: rooms.reduce((sum, room) => sum + room.items.filter((item) => item.hidden).length, 0),
+      attention: lines.filter((item) => {
+        const confidence = lineConfidence(item);
+        return !confidence.assessed && (confidence.needsReceipt || accuracyMark(item).next != null);
+      }).length,
     };
   }, [rooms]);
 
@@ -246,6 +277,41 @@ export function ItemizedRooms({
     setAddedNote("");
   }
 
+  function needsAttention(item: RoomItem) {
+    if (item.hidden) return null;
+    const confidence = lineConfidence(item);
+    if (confidence.assessed) return null;
+    if (confidence.needsReceipt) return "Add the receipt. It confirms the model, the price paid, and the description.";
+    return accuracyMark(item).next;
+  }
+
+  async function attachFile(roomId: string, item: RoomItem, file: File) {
+    const pdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    const image = file.type.startsWith("image/");
+    if ((!pdf && !image) || file.size > 8 * 1024 * 1024) {
+      setLineError({ id: item.id, text: "Use a picture or a PDF under 8 MB." });
+      return;
+    }
+    if (item.files.length >= 8) {
+      setLineError({ id: item.id, text: "This item already has 8 files." });
+      return;
+    }
+    const ext = pdf ? "pdf" : file.type.includes("png") ? "png" : "jpg";
+    const stored = `${item.id.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
+    const path = await onSaveMedia(inventoryId, stored, file);
+    if (!path) {
+      setLineError({ id: item.id, text: "That file did not save. Try it again." });
+      return;
+    }
+    setLineError(null);
+    onUpdateItem(inventoryId, roomId, item.id, {
+      files: [
+        ...item.files,
+        { id: crypto.randomUUID(), name: file.name.slice(0, 120) || stored, path, mediaType: file.type || (pdf ? "application/pdf" : "image/jpeg"), url: URL.createObjectURL(file) },
+      ],
+    });
+  }
+
   function framesFor(item: RoomItem) {
     const seen = new Set<string>();
     const frames: { src: string; atSec: number; label: string }[] = [];
@@ -253,6 +319,7 @@ export function ItemizedRooms({
       if (!sighting.clipId || sighting.atSec == null) continue;
       const hit = clipById.get(sighting.clipId);
       if (!hit?.clip.videoUrl || seen.has(hit.clip.id)) continue;
+      if (sighting.atSec === 0 && hit.clip.durationMs > 3000) continue;
       seen.add(hit.clip.id);
       frames.push({ src: hit.clip.videoUrl, atSec: sighting.atSec, label: `Clip ${hit.number} at ${formatClock(sighting.atSec * 1000)}` });
       if (frames.length === 3) break;
@@ -272,6 +339,9 @@ export function ItemizedRooms({
           </span>
           <span>
             <strong>{totals.replacement > 0 ? formatMoney(totals.replacement) : "—"}</strong> to replace
+          </span>
+          <span>
+            <strong>{totals.assessed}</strong> assessed
           </span>
           {totals.verified > 0 ? (
             <span className="is-verified">
@@ -362,19 +432,45 @@ export function ItemizedRooms({
         </section>
       ) : null}
 
+      {rooms.some((room) => room.items.length > 0) ? (
+        <div className="line-filter" role="group" aria-label="Which lines to show">
+          <button type="button" aria-pressed={lineFilter === "all"} onClick={() => setLineFilter("all")}>
+            All
+          </button>
+          <button type="button" aria-pressed={lineFilter === "attention"} onClick={() => setLineFilter("attention")}>
+            Needs a receipt{totals.attention > 0 ? ` · ${totals.attention}` : ""}
+          </button>
+          <button type="button" aria-pressed={lineFilter === "hidden"} onClick={() => setLineFilter("hidden")}>
+            Hidden{totals.hidden > 0 ? ` · ${totals.hidden}` : ""}
+          </button>
+        </div>
+      ) : null}
+
       {rooms.length === 0 ? (
         <p className="empty-line">Nothing was listed from this walkthrough. Add an item below, or scan again.</p>
       ) : (
         <div className="room-blocks">
           {rooms.map((room) => {
-            const roomTotal = room.items.reduce((sum, item) => sum + (item.priceUsd ?? 0) * item.count, 0);
+            const active = room.items.filter((item) => !item.hidden);
+            const roomTotal = active.reduce((sum, item) => sum + (item.priceUsd ?? 0) * item.count, 0);
+            const hiddenCount = room.items.length - active.length;
+            const rows = room.items
+              .filter((item) => {
+                if (lineFilter === "hidden") return item.hidden;
+                if (lineFilter === "attention") return needsAttention(item) != null;
+                return true;
+              })
+              .slice()
+              .sort((a, b) => Number(a.hidden) - Number(b.hidden));
+            if (rows.length === 0) return null;
             return (
               <details key={room.id} className="room-fold" open>
                 <summary className="room-head">
                   <span className="room-title">{room.title}</span>
                   <span className="room-meta">
-                    {room.items.length} {room.items.length === 1 ? "line" : "lines"}
+                    {active.length} {active.length === 1 ? "line" : "lines"}
                     {roomTotal > 0 ? ` · ${formatMoney(roomTotal)}` : ""}
+                    {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
                   </span>
                   <span className="fold-mark" aria-hidden="true" />
                 </summary>
@@ -401,7 +497,8 @@ export function ItemizedRooms({
                   </button>
                 )}
                 <ul className="line-list">
-                  {room.items.map((item) => {
+                  {[...rows.filter((item) => !isDecor(item)), ...rows.filter((item) => isDecor(item))].map((item, index, ordered) => {
+                    const decorHeading = isDecor(item) && (index === 0 || !isDecor(ordered[index - 1]!));
                     const chip = chipFor(item);
                     const mark = accuracyMark(item);
                     const frames = framesFor(item);
@@ -417,9 +514,13 @@ export function ItemizedRooms({
                     const busy = checkingId === item.id;
                     const firstFrame = frames[0];
                     const verified = receiptVerified(item);
+                    const confidence = lineConfidence(item);
+                    const attention = needsAttention(item);
                     return (
-                      <li key={item.id}>
-                        <details className="line">
+                      <Fragment key={item.id}>
+                        {decorHeading ? <li className="decor-label">Decor</li> : null}
+                      <li>
+                        <details className={item.hidden ? "line is-hidden" : "line"}>
                           <summary className="line-row">
                             <span className="line-thumb">
                               {item.photoUrl ? (
@@ -433,6 +534,7 @@ export function ItemizedRooms({
                                   {initials(item.name)}
                                 </span>
                               )}
+                              <span className="line-thumb-name">{item.name}</span>
                             </span>
                             <span className="line-main">
                               <span className="line-name">
@@ -440,17 +542,43 @@ export function ItemizedRooms({
                                 {item.count > 1 ? <span className="line-count"> × {item.count}</span> : null}
                               </span>
                               <span className="line-sub">
+                                {confidence.percent != null ? (
+                                  <span className={`line-chip ${confidence.assessed ? "is-settled" : "is-open"}`}>{confidence.percent}%</span>
+                                ) : null}
                                 <span className={`line-chip is-${chip.tone}`}>{chip.label}</span>
+                                {item.declared ? <span className="line-sub-text">Declared by you</span> : null}
+                                {item.userNote ? <span className="line-sub-text">{item.userNote.slice(0, 90)}</span> : null}
                                 {sub ? <span className="line-sub-text">{sub}</span> : null}
                               </span>
                             </span>
                             <span className="line-value">
-                              {lineTotal == null ? "—" : formatMoney(lineTotal)}
-                              {item.count > 1 && item.priceUsd != null ? <span className="line-each">{formatMoney(item.priceUsd)} each</span> : null}
+                              {item.hidden ? "Hidden" : lineTotal == null ? "—" : formatMoney(lineTotal)}
+                              {!item.hidden && item.count > 1 && item.priceUsd != null ? <span className="line-each">{formatMoney(item.priceUsd)} each</span> : null}
+                            </span>
+                            <span className="line-tools">
+                              {attention ? (
+                                <span className="line-attention" title={attention} aria-label={attention}>
+                                  !
+                                </span>
+                              ) : null}
+                              <button
+                                type="button"
+                                className={item.hidden ? "line-hide is-restore" : "line-hide"}
+                                aria-label={item.hidden ? `Show ${item.name}` : `Hide ${item.name} from the report`}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  onUpdateItem(inventoryId, room.id, item.id, { hidden: !item.hidden });
+                                }}
+                              >
+                                {item.hidden ? "+" : "−"}
+                              </button>
                             </span>
                           </summary>
 
                           <div className="line-body">
+                            <p className="line-story">{lineStory(item)}</p>
                             <div className="line-media">
                               {item.photoUrl ? (
                                 <figure>
@@ -483,22 +611,33 @@ export function ItemizedRooms({
 
                             <dl className="line-values">
                               <div>
-                                <dt>Replacement</dt>
+                                <dt>Replacement cost</dt>
                                 <dd>
                                   {item.priceUsd == null ? "Not priced yet" : formatMoney(item.priceUsd)}
                                   {item.count > 1 && lineTotal != null ? <span> · {formatMoney(lineTotal)} for {item.count}</span> : null}
                                 </dd>
                               </div>
                               <div>
-                                <dt>Cash value</dt>
+                                <dt>Actual cash value</dt>
                                 <dd>
                                   {item.cashValueUsd == null ? "—" : formatMoney(item.cashValueUsd)}
                                   {item.count > 1 && cashTotal != null ? <span> · {formatMoney(cashTotal)} for {item.count}</span> : null}
                                 </dd>
                               </div>
+                              {source && !verified ? (
+                                <div>
+                                  <dt>Verification source</dt>
+                                  <dd>
+                                    <a href={source} rel="noreferrer noopener" target="_blank">
+                                      Priced from this page
+                                    </a>
+                                    {item.pricedAt ? <span> · {formatWhen(item.pricedAt)}</span> : null}
+                                  </dd>
+                                </div>
+                              ) : null}
                               <div className="line-paid">
                                 <dt>
-                                  <label htmlFor={`paid-${item.id}`}>Price paid</label>
+                                  <label htmlFor={`paid-${item.id}`}>Amount paid</label>
                                 </dt>
                                 <dd>
                                   <input
@@ -521,6 +660,57 @@ export function ItemizedRooms({
                                   <span className={verified ? "paid-source is-verified" : "paid-source"}>
                                     {verified ? "Receipt verified" : item.userValueUsd != null ? "From you · not verified yet" : "Add a receipt to verify it"}
                                   </span>
+                                </dd>
+                              </div>
+                              <div className="line-paid">
+                                <dt>
+                                  <label htmlFor={`declared-${item.id}`}>Self declared value</label>
+                                </dt>
+                                <dd>
+                                  <input
+                                    id={`declared-${item.id}`}
+                                    inputMode="decimal"
+                                    value={item.selfDeclaredUsd ?? ""}
+                                    placeholder="Your own figure"
+                                    onChange={(event) => {
+                                      const text = event.target.value.trim().replace(/[$,]/g, "");
+                                      if (text === "") {
+                                        onUpdateItem(inventoryId, room.id, item.id, { selfDeclaredUsd: null });
+                                        return;
+                                      }
+                                      const amount = Number(text);
+                                      if (!Number.isFinite(amount) || amount < 0 || amount > 1_000_000) return;
+                                      onUpdateItem(inventoryId, room.id, item.id, { selfDeclaredUsd: amount });
+                                    }}
+                                  />
+                                  {item.selfDeclaredUsd != null ? <span className="self-declared-label">Self declared value</span> : null}
+                                </dd>
+                              </div>
+                              <div className="line-paid">
+                                <dt>
+                                  <label htmlFor={`appraisal-${item.id}`}>Formal appraisal</label>
+                                </dt>
+                                <dd>
+                                  <input
+                                    id={`appraisal-${item.id}`}
+                                    inputMode="decimal"
+                                    value={item.appraisalUsd ?? ""}
+                                    placeholder="Only if it was formally appraised"
+                                    onChange={(event) => {
+                                      const text = event.target.value.trim().replace(/[$,]/g, "");
+                                      if (text === "") {
+                                        onUpdateItem(inventoryId, room.id, item.id, { appraisalUsd: null });
+                                        return;
+                                      }
+                                      const amount = Number(text);
+                                      if (!Number.isFinite(amount) || amount < 0 || amount > 1_000_000) return;
+                                      onUpdateItem(inventoryId, room.id, item.id, {
+                                        appraisalUsd: amount,
+                                        priceUsd: amount,
+                                        valueBasis: "Appraisal: formal value on file.",
+                                      });
+                                    }}
+                                  />
                                 </dd>
                               </div>
                               {item.condition || item.damage ? (
@@ -546,8 +736,8 @@ export function ItemizedRooms({
                               <div className="line-estimate">
                                 <p>
                                   {item.skipped.includes("label")
-                                    ? "You accepted this estimate from the video."
-                                    : "Estimated from the video. The model number is not needed to price it."}
+                                    ? "This replacement estimate was accepted from the walkthrough."
+                                    : "Replacement cost is estimated from the walkthrough. A model number is not required to price it."}
                                   {item.likelyBrand ? ` Likely ${item.likelyBrand.name}, not confirmed: ${item.likelyBrand.clues}.` : ""}
                                   {item.options.length > 0
                                     ? ` Could be ${item.options.map((option) => `${option.label} (${formatMoney(option.lowUsd)}–${formatMoney(option.highUsd)})`).join("; ")}.`
@@ -562,15 +752,46 @@ export function ItemizedRooms({
                             ) : null}
 
                             <label className="field line-description">
-                              <span>Description</span>
+                              <span>Your description</span>
                               <textarea
                                 rows={2}
                                 maxLength={500}
                                 value={item.userNote}
-                                placeholder="Anything a reviewer should know"
+                                placeholder="Add what a reviewer should know about this item"
                                 onChange={(event) => onUpdateItem(inventoryId, room.id, item.id, { userNote: event.target.value })}
                               />
                             </label>
+
+                            {item.declared ? (
+                              <p className="hint">Declared by you. This line stays on the report unless you hide it.</p>
+                            ) : (
+                              <button type="button" className="button quiet line-action" onClick={() => onUpdateItem(inventoryId, room.id, item.id, { declared: true })}>
+                                Declare this item
+                              </button>
+                            )}
+
+                            {item.files.length > 0 ? (
+                              <ul className="line-files">
+                                {item.files.map((file) => (
+                                  <li key={file.id}>
+                                    {file.url ? (
+                                      <a href={file.url} target="_blank" rel="noreferrer">
+                                        {file.name}
+                                      </a>
+                                    ) : (
+                                      <span>{file.name}</span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="text-button"
+                                      onClick={() => onUpdateItem(inventoryId, room.id, item.id, { files: item.files.filter((entry) => entry.id !== file.id) })}
+                                    >
+                                      Remove
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
 
                             <div className="line-actions">
                               <label className="button quiet line-action">
@@ -586,6 +807,18 @@ export function ItemizedRooms({
                                   }}
                                 />
                               </label>
+                              <label className="button quiet line-action">
+                                Attach a file
+                                <input
+                                  type="file"
+                                  accept="image/*,application/pdf,.pdf"
+                                  onChange={(event) => {
+                                    const file = event.target.files?.[0];
+                                    event.target.value = "";
+                                    if (file) void attachFile(room.id, item, file);
+                                  }}
+                                />
+                              </label>
                               <VoiceNote
                                 inventoryId={inventoryId}
                                 disabled={busy}
@@ -594,7 +827,7 @@ export function ItemizedRooms({
                               {confirmDelete === item.id ? (
                                 <span className="line-confirm">
                                   <button type="button" className="text-button is-danger" onClick={() => onDeleteItem(inventoryId, room.id, item.id)}>
-                                    Delete line
+                                    Delete from this inventory
                                   </button>
                                   <button type="button" className="text-button" onClick={() => setConfirmDelete("")}>
                                     Keep
@@ -628,7 +861,7 @@ export function ItemizedRooms({
                                 ) : null}
                                 {frames.length > 0 ? (
                                   <>
-                                    <dt>The camera</dt>
+                                    <dt>Shown on the walkthrough</dt>
                                     <dd>{frames.map((frame) => frame.label.toLowerCase()).join(", ")}</dd>
                                   </>
                                 ) : null}
@@ -692,6 +925,7 @@ export function ItemizedRooms({
                           </div>
                         </details>
                       </li>
+                      </Fragment>
                     );
                   })}
                 </ul>

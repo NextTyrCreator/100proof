@@ -62,6 +62,7 @@ export function ScanGlance({
   const [seen, setSeen] = useState<{ names: string[]; at: number }>({ names: [], at: 0 });
   const [visible, setVisible] = useState(true);
   const busyRef = useRef(false);
+  const failsRef = useRef(0);
   const lastRef = useRef<{ at: number; sig: Uint8Array | null }>({ at: 0, sig: null });
 
   useEffect(() => {
@@ -92,10 +93,19 @@ export function ScanGlance({
           body.set("frame", new File([frame], "glance.jpg", { type: "image/jpeg" }));
           body.set("inventoryId", inventoryId);
           const response = await fetch("/api/scan/glance", { method: "POST", body });
+          if (!response.ok) {
+            failsRef.current += 1;
+            if (failsRef.current >= 3) window.clearInterval(timer);
+            return;
+          }
+          failsRef.current = 0;
           const parsed = glanceSchema.safeParse(await response.json().catch(() => null));
           if (parsed.success && parsed.data.seen.length > 0) setSeen({ names: parsed.data.seen, at: Date.now() });
         })
-        .catch(() => undefined)
+        .catch(() => {
+          failsRef.current += 1;
+          if (failsRef.current >= 3) window.clearInterval(timer);
+        })
         .finally(() => {
           busyRef.current = false;
         });
