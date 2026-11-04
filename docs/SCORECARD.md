@@ -11,7 +11,7 @@ Four filmed walks of a full house (Tests 2 to 5 in `docs/SCAN_METRICS.md`) produ
 On 2026-11-03 the decision was to make a reference the right way around: inventory a small personal space by hand first, with no preparation of the space beyond doing the inventory, and treat that handwritten list as the truth the scan must reproduce. The space is a front entrance, one bedroom, a hallway, and a home gym.
 
 - The hand walk took about 20 minutes. It was written on two pages (40 numbered rows).
-- Transcribing the two pages into the workbook, settling the counting rules, and building the scoring sheet took about another 30 minutes with AI assistance. About an hour in all.
+- Transcribing the two pages into the workbook, settling the counting rules, and building the scoring sheet took about another 30 minutes. Claude Fable 5.1 and Muse Wonder read the handwritten pages. The scorecard was then implemented with Claude Fable 5.1. About an hour in all.
 - The workbook is `100Proof_Personal_Property_Inventory.xlsx`. The same baseline, counting rules, and scoring arithmetic are in `apps/web/lib/scorecard.ts`, and the harness checks them.
 
 The owner walked and wrote the list and attests to it. That is what makes it usable as a reference. It does not make the product accurate; it makes the product measurable.

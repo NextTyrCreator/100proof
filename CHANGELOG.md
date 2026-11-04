@@ -4,6 +4,9 @@ All notable changes are documented here. Format: [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Fixed
+- The build record said `ARCHITECTURE.md` was written before kickoff and that the sample rooms were staged. Both were wrong, and were corrected on 2026-11-04 while preparing the repository. The architecture was written on kickoff day. The sample rooms are the house as it stands, filmed during the event.
+
 ### Changed
 - A close-up of a logo or model plate is that object's brand, model, and any year on the plate. A price or an age said while showing it is stored on that line. The same appliance named twice in one room is one object.
 - While a scan is recording, the screen stays awake and shows the camera with Pause. Play and Done appear once it is paused. A line now says whether the walkthrough supported a brand, a likely brand, or no brand, how the replacement cost was priced, and that a receipt or a connected account can verify it another way.
