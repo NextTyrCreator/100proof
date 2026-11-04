@@ -12,9 +12,9 @@ import {
 } from "../../lib/information";
 import { siteUrl } from "../../lib/site";
 
-const title = "Home inventory for insurance, from a phone video";
+const title = "Personal property inventory for insurance and moving";
 const description =
-  "Film each room on your phone and get a home inventory your insurer can work from: counts, brands, models, replacement cost in your zip, and actual cash value. For homeowners, renters, insurers, and claims administrators.";
+  "Verifiable personal property and commercial property inventory from a phone video. For insurance, a move, or a contents claim. Priced in your zip.";
 
 export const metadata: Metadata = {
   title,
@@ -25,7 +25,7 @@ export const metadata: Metadata = {
 };
 
 const STEPS = [
-  { title: "Film", body: "Walk room by room for up to ten minutes. Say the brand, the year, and what you paid." },
+  { title: "Film", body: "Walk room by room for up to fifteen minutes. Say the brand, the year, and what you paid." },
   {
     title: "Review",
     body: "Meta's Muse Spark 1.3 lists each line as you film: what it is, its brand, its condition, and any damage it can see. Each line is priced new in your zip. Anything it cannot confirm is marked, and you are asked for the one thing that would.",
@@ -63,18 +63,18 @@ export default function InformationPage() {
       <JsonLd data={appJsonLd(`${siteUrl()}/information`)} />
 
       <header className="info-top">
-        <p className="info-kicker">Home inventory app for insurance</p>
-        <h1>Home inventory for insurance, from a phone video</h1>
+        <h1>Personal property inventory for insurance and moving</h1>
         <p className="info-lead">
-          Walk through your home with your phone and talk as you go. 100proof turns the video into a room-by-room list with
-          brands, counts, what each thing costs to replace in your zip, and what it is worth today.
+          100proof is a verifiable inventory of personal property, and of commercial property contents. Film the rooms on
+          your phone before you pack or before a claim. Each line shows what it costs to replace in your zip and what it is
+          worth today.
         </p>
         <div className="info-actions">
           <AudienceLink audience="insured" className="button login-send">
             Start your inventory
           </AudienceLink>
-          <AudienceLink audience="provider" className="info-text-link">
-            For insurers and administrators
+          <AudienceLink audience="provider" className="button quiet">
+            For insurers
           </AudienceLink>
         </div>
         <p className="info-meta">Free to start · Runs in your phone&apos;s browser · Nothing to install</p>

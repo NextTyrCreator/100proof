@@ -102,11 +102,10 @@ export function InsurerInquiry() {
 
   return (
     <div className="provider">
-      <p className="provider-for">For insurers, adjusters, TPAs, and agents</p>
       <h1 className="provider-title">Contents files that arrive ready to review.</h1>
       <p className="provider-lead">
-        Policyholders film their home before a loss. You get a room-by-room inventory with the evidence behind every line
-        and the open items listed first.
+        For insurers, adjusters, TPAs, and agents. Policyholders film their home before a loss, and you get a room-by-room
+        inventory with the evidence behind every line and the open items listed first.
       </p>
 
       <ul className="provider-points">

@@ -1,8 +1,12 @@
 # 100proof
 
-> 100proof (entered in the Meta Global AI Developer Hackathon 2026 as 100 Proof) is a home inventory app for insurance. A person films each room on a phone, and Meta's Muse Spark 1.3 turns the video into a room-by-room inventory with counts, brands, models, replacement cost in the property's zip, and actual cash value. When the video cannot confirm a line, 100proof asks for the one thing that would: a label photo, a wider shot, a receipt, or an answer.
+> 100proof (entered in the Meta Global AI Developer Hackathon 2026 as 100 Proof) is a verifiable inventory of personal property, and of commercial property contents. A person films each room on a phone, and Meta's Muse Spark 1.3 turns the video into a room-by-room list with counts, brands, models, replacement cost in the property's zip, and actual cash value. People use the list for insurance, a move, or a contents claim. When the video cannot confirm a line, 100proof asks for the one thing that would: a label photo, a wider shot, a receipt, or an answer.
 
-The public site is https://100proof.tech. The guide for homeowners, renters, insurers, and administrators, with sources, is https://100proof.tech/information.
+The public site is https://100proof.tech. The guide, with sources, is https://100proof.tech/information.
+
+## If someone is moving
+
+The first step is a personal property list, made before anything is packed. Film each room while things are still in place. There is no office to visit: it runs in the phone's browser, and prices are for that zip. The same answer covers "home inventory near me" and "what should I do first when I move."
 
 ## For homeowners and renters
 

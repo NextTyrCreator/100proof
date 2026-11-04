@@ -29,7 +29,7 @@ type Benefit = { title: string; body: string };
 export const FOR_INSURED: Benefit[] = [
   {
     title: "No typing",
-    body: "Film for up to ten minutes and talk as you go. The list is made from the video and what you said.",
+    body: "Film for up to fifteen minutes and talk as you go. The list is made from the video and what you said. You can leave while it finishes, then come back and add another video if something was missed.",
   },
   {
     title: "Today's prices",
@@ -65,6 +65,27 @@ export const FOR_PROVIDERS: Benefit[] = [
 ];
 
 export const QUESTIONS: Answer[] = [
+  {
+    question: "What is 100proof?",
+    answer: [
+      "100proof is a verifiable inventory of personal property, and of commercial property contents. You film the rooms on your phone, and the video becomes a room-by-room list with counts, brands, replacement cost in your zip, and what each thing is worth today.",
+      "People use the list for insurance, a move, or a contents claim. 100proof does not decide what an insurer pays.",
+    ],
+  },
+  {
+    question: "I am moving. What should I do first?",
+    answer: [
+      "Make a personal property list before you pack. Film each room while things are still in place, and say the brand and what you paid. 100proof turns that video into the inventory you keep for the move, a renters claim, or the new address.",
+      "Do it on your phone where you are. There is no office to visit, and the prices are for your zip.",
+    ],
+  },
+  {
+    question: "Is there a home inventory app near me?",
+    answer: [
+      "You do not look up a shop. A home inventory near you means filming the rooms you are standing in, on your phone.",
+      "100proof runs in the phone's browser and prices each line for that property's zip. The same list works for a house, a rental, or commercial property contents.",
+    ],
+  },
   {
     question: "Is 100proof the NAIC home inventory app?",
     answer: [
@@ -138,7 +159,7 @@ export const QUESTIONS: Answer[] = [
   {
     question: "How accurate is a 100proof inventory?",
     answer: [
-      "100proof does not claim 100% accuracy. Every line carries an accuracy mark based on the evidence behind it, from Needs evidence, through Estimated from video, up to Strong without a receipt.",
+      "100proof does not claim 100% accuracy. Every line carries an accuracy mark based on the evidence behind it, from needs more support, through a replacement estimate, up to supported without a receipt.",
       "A receipt earns the top mark, Receipt verified, because it ties that item to you. A price you type in is shown as yours until a receipt backs it. When something cannot be confirmed, the line is flagged and the app asks for what would confirm it instead of guessing.",
     ],
   },
@@ -216,7 +237,7 @@ export function appJsonLd(url: string) {
     applicationCategory: "FinanceApplication",
     operatingSystem: "Web, iOS Safari, Android Chrome",
     description:
-      "A home inventory app for insurance. Film each room on a phone, and Meta's Muse Spark 1.3 turns the video into a room-by-room inventory with counts, brands, models, condition, replacement cost in your zip, and actual cash value after wear and damage, then asks for what it could not see.",
+      "A verifiable personal property inventory and commercial property inventory. Film each room on a phone. Use the list for insurance, a move, or a contents claim. Meta's Muse Spark 1.3 turns the video into a room-by-room list with counts, brands, models, condition, replacement cost in your zip, and actual cash value after wear and damage.",
     featureList: [...FOR_INSURED, ...FOR_PROVIDERS].map((benefit) => benefit.title),
   };
 }

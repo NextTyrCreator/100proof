@@ -80,11 +80,13 @@ export function HeaderBar({ signedIn, email }: { signedIn: boolean; email: strin
       </button>
       {open
         ? createPortal(
-            <div className="menu-sheet" id={menuId} style={{ top: barHeight }} onClick={closeFromChoice}>
-              {signedIn && email ? <p className="menu-email">{email}</p> : null}
-              {signedIn ? <Nav /> : <AudienceTabs />}
-              <div className="menu-spacer" />
-              {signedIn ? <SignOut className="button quiet menu-logout" /> : null}
+            <div className="menu-layer" style={{ top: barHeight }}>
+              <div className="menu-backdrop" onClick={() => setOpen(false)} />
+              <div className="menu-sheet" id={menuId} role="dialog" aria-label="Menu" onClick={closeFromChoice}>
+                {signedIn && email ? <p className="menu-email">{email}</p> : null}
+                {signedIn ? <Nav /> : <AudienceTabs />}
+                {signedIn ? <SignOut className="menu-logout" /> : null}
+              </div>
             </div>,
             document.body,
           )

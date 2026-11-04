@@ -11,10 +11,13 @@ export function AudienceTabs() {
   const onInformation = path === "/information";
 
   function choose(next: Audience) {
-    setAudience(next);
     const href = next === "provider" ? "/?for=providers" : "/";
-    if (path !== "/") router.push(href);
-    else window.history.replaceState(null, "", href);
+    if (path !== "/") {
+      router.push(href);
+      return;
+    }
+    setAudience(next);
+    window.history.replaceState(null, "", href);
   }
 
   return (
