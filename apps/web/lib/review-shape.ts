@@ -97,6 +97,7 @@ const rawItemSchema = z.object({
   seenReplacementUsd: z.number().finite().nonnegative().max(1_000_000).nullable().optional(),
   seenAtSec: z.number().finite().nonnegative().max(600).nullable().optional(),
   saidAtSec: z.number().finite().nonnegative().max(600).nullable().optional(),
+  appraise: z.boolean().nullable().optional(),
   countSettled: z.boolean().nullable().optional(),
   identitySettled: z.boolean().nullable().optional(),
   options: z
@@ -209,8 +210,24 @@ export const reviewItemSchema = z.object({
   sourceUrl: z.string().max(300).nullable(),
   userNote: z.string().max(500),
   userValueUsd: z.number().finite().nonnegative().max(1_000_000).nullable(),
+  appraisalUsd: z.number().finite().nonnegative().max(1_000_000).nullable().default(null),
+  selfDeclaredUsd: z.number().finite().nonnegative().max(1_000_000).nullable().default(null),
   photoUrl: z.string().max(2_000).nullable(),
   photoPath: z.string().max(300).nullable(),
+  files: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().trim().min(1).max(120),
+        path: z.string().min(1).max(300),
+        mediaType: z.string().max(80),
+        url: z.string().max(2_000).nullable().default(null),
+      }),
+    )
+    .max(8)
+    .default([]),
+  declared: z.boolean().default(false),
+  hidden: z.boolean().default(false),
   highValue: z.boolean(),
   sightings: z.array(sightingSchema).max(60),
   said: z.array(saidFactSchema).max(20),
@@ -442,6 +459,7 @@ function asSizeBand(value: string, category: string): SizeBand | null {
 export function asCondition(value: string | null | undefined): Condition | null {
   const text = (value ?? "").trim().toLowerCase().replace(/[_-]+/g, " ");
   if (!text) return null;
+  if (/\b(unopened|sealed|original box|original packaging)\b/.test(text)) return "new";
   if ((/\b(no|not|without|zero)\b/.test(text) && text.includes("damage")) || text === "undamaged" || text === "intact") return "good";
   if (text.includes("damage") || text.includes("broken")) return "damaged";
   if (text === "poor" || text.includes("heavy")) return "worn";
@@ -527,10 +545,29 @@ export function revalue(item: Pick<RoomItem, "priceUsd" | "ageYears" | "category
 
 function shouldGroup(draft: Draft) {
   if (draft.serial) return false;
+  if (isDecor(draft)) return false;
+  if (isBulkKind(draft)) return true;
   if (ALWAYS_ROW.has(draft.category)) return false;
   const unit = draft.seenReplacementUsd;
   if (unit != null && unit >= GROUP_UNDER_USD) return false;
   return true;
+}
+
+/** Decor is one line per piece. The room shows those lines together. */
+export function isDecor(parts: { name: string; itemType?: string | null; detail?: string; description?: string; category?: string | null }) {
+  return /\bdecor/i.test(`${parts.name} ${parts.itemType ?? ""} ${parts.detail ?? ""} ${parts.description ?? ""} ${parts.category ?? ""}`);
+}
+
+/**
+ * Dishes, glassware, flatware, cookware, and linens are counted as one bulk line, never one row per plate.
+ * Sterling silverware is not bulk: it stays on its own row by value.
+ */
+function isBulkKind(parts: { name: string; itemType?: string | null; category?: string | null }) {
+  const category = normLabel(parts.category ?? "");
+  if (category === "dishes" || category === "utensils" || category === "linens") return true;
+  const text = `${parts.name} ${parts.itemType ?? ""}`.toLowerCase();
+  if (/\b(sterling|silver)\b/.test(text)) return false;
+  return /\b(plates?|bowls?|dinnerware|dishes|dish set|glassware|wine glasses|drinking glasses|tumblers?|mugs?|cups?|flatware|cutlery|utensils?|cookware|pots and pans|bakeware|towels?|washcloths?|sheets?|pillowcases?)\b/.test(text);
 }
 
 function knownMark(value: string | null | undefined) {
@@ -539,6 +576,26 @@ function knownMark(value: string | null | undefined) {
   const norm = text.toLowerCase();
   if (["unknown", "n/a", "na", "none", "unbranded", "generic", "no brand", "not visible"].includes(norm)) return null;
   return text;
+}
+
+/** A model name with its maker, or a model number, is enough to appraise. A brand alone is not. */
+export function modelRecognized(brand: string | null, markings: string | null) {
+  if (!markings) return false;
+  if (/^likely\b/i.test(markings)) return false;
+  if (brand) return true;
+  return /\d/.test(markings);
+}
+
+/** A drink, a pencil, a notepad, trash, or an empty shipping box is not appraised. A storage box is. */
+export function isNotProperty(name: string, kind: string, detail: string) {
+  const text = `${name} ${kind} ${detail}`.toLowerCase();
+  if (/\b(storage|moving|plastic|file|bin|tote|crate)\b/.test(text) && /\b(box|bin|tote|crate)\b/.test(text)) return false;
+  if (/\b(trash|garbage|rubbish|scrap paper|notepad|sticky notes?|loose papers?)\b/.test(text)) return true;
+  if (/\b(pencil|pen|marker)\b/.test(text) && !/\b(sharpener|case|set|holder|cup)\b/.test(text)) return true;
+  if (/\b(drink|coffee|tea|soda|water)\b/.test(text) && /\b(mug|cup|glass)\b/.test(text) && !/\b(set|maker|machine|table|press)\b/.test(text)) return true;
+  if (/\b(empty|shipping|cardboard)\b/.test(text) && /\bbox(es)?\b/.test(text)) return true;
+  if (/\b(food|snack|leftovers?|perishables?)\b/.test(text) && !/\b(processor|saver|storage|container)\b/.test(text)) return true;
+  return false;
 }
 
 function groupTitle(draft: Draft) {
@@ -556,6 +613,7 @@ function groupTitle(draft: Draft) {
 }
 
 function rowName(draft: Draft, grouped: boolean) {
+  if (grouped && isBulkKind(draft) && draft.count > 1 && !draft.brand) return `Various ${draft.itemType || draft.name}`.slice(0, 120);
   if (grouped) return groupTitle(draft);
   if (draft.brand && !draft.name.toLowerCase().includes(draft.brand.toLowerCase())) {
     return `${draft.brand} ${draft.name}`.slice(0, 120);
@@ -581,7 +639,9 @@ function blankItem(
     id: crypto.randomUUID(),
     name: rowName(draft, grouped),
     detail: (grouped
-      ? `Counted together for the carrier. ${draft.count} ${[draft.brand, draft.itemType || draft.category].filter(Boolean).join(" ")} pieces, each under $${GROUP_UNDER_USD} to replace.${draft.markings ? ` Mark: ${draft.markings}.` : ""}`
+      ? isBulkKind(draft)
+        ? `Bulk line. About ${draft.count} ${[draft.brand, draft.itemType || draft.name].filter(Boolean).join(" ")} counted as one set; the count is an estimate from the walk. Priced per piece.${draft.description ? ` ${draft.description}` : ""}`
+        : `Counted together for the carrier. ${draft.count} ${[draft.brand, draft.itemType || draft.category].filter(Boolean).join(" ")} pieces, each under $${GROUP_UNDER_USD} to replace.${draft.markings ? ` Mark: ${draft.markings}.` : ""}`
       : draft.description
     ).slice(0, 400),
     count: draft.count,
@@ -610,8 +670,13 @@ function blankItem(
     sourceUrl,
     userNote: "",
     userValueUsd: draft.pricePaidUsd,
+    appraisalUsd: null,
+    selfDeclaredUsd: null,
     photoUrl: null,
     photoPath: null,
+    files: [],
+    declared: false,
+    hidden: false,
     highValue: unit != null && unit > HIGH_VALUE_OVER_USD,
     sightings: draft.seenAt.slice(0, 60).map((atSec) => ({ clipId: null, atSec })),
     said: draft.narration
@@ -656,6 +721,30 @@ function settledAsk(
   return { kind: ask.kind, prompt };
 }
 
+/** Two lines that share one second are not each showing that frame. Drop the shared time so the thumbnail is not another object. */
+export function clearSharedSightings<T extends { roomTitle: string; seenAt: number[] }>(drafts: T[]) {
+  const rooms = new Map<string, T[]>();
+  for (const draft of drafts) {
+    const list = rooms.get(draft.roomTitle) ?? [];
+    list.push(draft);
+    rooms.set(draft.roomTitle, list);
+  }
+  for (const group of rooms.values()) {
+    const at = new Map<number, T[]>();
+    for (const draft of group) {
+      if (draft.seenAt.length !== 1) continue;
+      const second = draft.seenAt[0] ?? 0;
+      const list = at.get(second) ?? [];
+      list.push(draft);
+      at.set(second, list);
+    }
+    for (const list of at.values()) {
+      if (list.length < 2) continue;
+      for (const draft of list) draft.seenAt = [];
+    }
+  }
+}
+
 /** Turn a model list into itemized rows and category groups under $100. */
 export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptLine[], heard: Heard = "video"): ReviewResult {
   const pricedAt = new Date().toISOString();
@@ -692,7 +781,7 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
         seenAt: item.seenAtSec == null ? [] : [item.seenAtSec],
         saidAtSec: item.saidAtSec ?? null,
         countSettled: item.countSettled ?? true,
-        identitySettled: item.identitySettled ?? true,
+        identitySettled: modelRecognized(knownMark(item.brand), knownMark(item.markings)),
         options: (item.options ?? [])
           .map((option) => ({
             label: option.label,
@@ -703,12 +792,25 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
         ask: null,
       };
       if (draft.likelyBrand && !draft.brand && !draft.markings) draft.identitySettled = false;
+      const packing = `${draft.description} ${draft.narration ?? ""}`;
+      if (!draft.damage && /\b(unopened|sealed|brand new|original box|original packaging)\b/i.test(packing)) {
+        draft.condition = "new";
+        if (!/no damage seen/i.test(draft.description)) {
+          draft.description = `${draft.description} New in original packaging. No damage seen.`.trim().slice(0, 400);
+        }
+      } else if (!draft.damage && draft.condition == null && /\bexcellent\b/i.test(packing)) {
+        draft.condition = "good";
+        if (!/no damage seen/i.test(draft.description)) {
+          draft.description = `${draft.description} Excellent. No damage seen.`.trim().slice(0, 400);
+        }
+      }
       draft.ask = settledAsk(item.ask, draft.countSettled, draft.identitySettled);
+      if (item.appraise === false || isNotProperty(draft.name, draft.itemType, draft.description)) continue;
       if (draft.serial && draft.markings?.includes(draft.serial)) {
         draft.markings = knownMark(draft.markings.replaceAll(draft.serial, " "));
       }
       draft.key = shouldGroup(draft)
-        ? ["group", draft.category, draft.itemType, draft.wearer ?? "", draft.sizeBand ?? "", draft.brand ?? "", draft.markings ?? ""].map(normLabel).join("|")
+        ? ["group", draft.category, draft.itemType, draft.wearer ?? "", draft.sizeBand ?? "", draft.size ?? "", draft.brand ?? "", draft.markings ?? ""].map(normLabel).join("|")
         : [lineKey(draft), normLabel(draft.brand ?? ""), normLabel(draft.markings ?? "")].join("|");
       const existing = drafts.find((line) => line.roomTitle === draft.roomTitle && line.key === draft.key);
       if (!existing) {
@@ -735,6 +837,8 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
       existing.condition = worseCondition(existing.condition, draft.condition);
       existing.damage = worseDamage(existing.damage, draft.damage);
       existing.likelyBrand = existing.likelyBrand ?? draft.likelyBrand;
+      existing.color = existing.color || draft.color;
+      existing.serial = existing.serial || draft.serial;
       if (!existing.narration && draft.narration) {
         existing.narration = draft.narration;
         existing.saidAtSec = draft.saidAtSec;
@@ -742,6 +846,7 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
     }
   }
 
+  clearSharedSightings(drafts);
   const prices = new Map(priced.map((line) => [line.key, line]));
   const keptPrices = new Map(kept.map((line) => [priceKey(line), line.replacementUsd]));
   const byRoom = new Map<string, RoomItem[]>();
@@ -769,11 +874,19 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
       basis = "Local replacement.";
     }
     let groupedNow = grouped;
-    if (price != null && price >= GROUP_UNDER_USD) groupedNow = false;
+    if (isDecor(draft)) groupedNow = false;
+    else if (isBulkKind(draft)) groupedNow = true;
+    else if (price != null && price >= GROUP_UNDER_USD) groupedNow = false;
     else if (price != null && price < GROUP_UNDER_USD && !draft.serial && !ALWAYS_ROW.has(draft.category)) groupedNow = true;
     const item = blankItem(draft, price, basis, sourceUrl, groupedNow, heard, found?.replacementUsd != null ? pricedAt : null);
     const bucket = byRoom.get(draft.roomTitle) ?? [];
-    bucket.push(item);
+    if (isDecor(draft) && draft.count > 1) {
+      item.count = 1;
+      bucket.push(item);
+      for (let copy = 1; copy < draft.count; copy += 1) bucket.push({ ...item, id: crypto.randomUUID() });
+    } else {
+      bucket.push(item);
+    }
     byRoom.set(draft.roomTitle, bucket);
   }
 

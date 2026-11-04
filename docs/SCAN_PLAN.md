@@ -40,7 +40,7 @@ The inventory had about 90 lines. The ones that matter:
 3. **Retry automatically.** A failed clip is retried twice, with a short pause, before the Retry button appears.
 4. **Shorter output and more room.** The listing leaves out empty fields instead of writing nulls, which cuts output by a large share, and its output limit goes from 8,000 to 16,000 tokens. An `incomplete` answer that has complete rooms is kept up to its last complete item instead of being thrown away.
 5. **Record every call, including failures.** Failed calls go to the ledger with `ok = false`, and the server logs a reason code (`incomplete`, `timeout`, `upstream`, `parse`) with no content. The measures panel then shows the real failure rate.
-6. **Ten minutes per scan.** Sessions are up to 10 minutes (20 clips). "Scan more" on a saved inventory adds up to another 5 minutes.
+6. **Fifteen minutes per scan.** Sessions are up to 15 minutes (30 clips). "Scan more" on a saved inventory adds up to another 5 minutes. The person can leave while the list finishes, then come back, review it, and film another pass for what was missed.
 7. **Clean transcripts.** Speaker tags are removed before anything uses the text.
 
 Target for a 10-minute scan: the last line is listed within about 60 seconds of Done, and prices within about 90 seconds. The harness checks the clip queue, the salvage, the tag stripping, and the 10-minute clock. The live latency check is in `docs/EVAL.md`.
@@ -74,6 +74,8 @@ While the camera screen is visible and recording, a small frame (about 384 px) i
 
 - Each room is a collapsible section with its line count and total.
 - Each line is one collapsed row: a picture, the name and count, an evidence chip, and the line total. The picture is your photo if there is one, otherwise the frame from the clip at the moment the item was clearest. That frame is cut on the phone from the kept clip, so nothing new is stored or sent.
+
+**Stills are the record. The walkthrough file is not.** A 10-minute walk is already encoded at 480p and 12 frames a second, about 700 kilobits a second, roughly 60 MB. Storing that file is a few cents. It is the wrong picture: a brand or a serial cannot be read from it, and opening the inventory downloads it again so the phone can cut a 320 px thumbnail. The sharp image is the camera preview, before that shrink. The next capture keeps one still from that preview at the second each item is clearest, and one still when a room is established, and those JPEGs are what the list shows. The model still receives the small clip during the scan. The walkthrough file stops being uploaded once those stills are on the lines.
 - Open a line to see:
   - Pictures, plus "Add photo."
   - Replacement, cash value, and your price paid, marked as from you.
@@ -83,6 +85,7 @@ While the camera screen is visible and recording, a small frame (about 384 px) i
   - "Use this estimate."
   - Evidence and changes.
 - "Scan more" opens another clip of up to 5 minutes on the same inventory.
+- A minus on the row hides that line. A hidden line is dimmed, drops to the bottom of its room, and is left out of the totals, the CSV, the email, and the claim file. It can be shown again. Delete, inside the line, removes it from the record. The owner can declare the line, write a description, and attach a picture or a PDF. A line that still needs a receipt or another fact shows an attention mark. The list of saved inventories starts loading a record when its row is touched, and opening one plays a short portal until the record is ready.
 - The layout is mobile-first, with tap targets of at least 44 px.
 
 ### 2.7 Connections (first working piece)
@@ -96,9 +99,9 @@ A **Connections** page in the navigation.
 ### 2.8 Cost
 
 - **Listing:** one call per clip, as before.
-- **Pricing:** fewer calls than before, because lines repeated across clips are priced once and the reconcile happens before the last pricing.
-- **Reconcile:** one text call per scan.
-- **Glance:** at most 150 small image calls per 10-minute scan.
+- **Pricing:** lines wait until 12 are ready, then go out in one batch of up to 30. The walk no longer starts a search after every clip. Anything still unpriced, including a line whose brand, model, color, or description was filled in at the end, is priced once when the scan finishes.
+- **Reconcile:** one text call per scan. It also fills an empty brand, model, serial, color, or description, and only from that object's own clip and what was said about it.
+- **Glance:** at most 150 small image calls per 10-minute scan. After three failures in a row it stops for that walk. The recording indicator stays.
 - **Voice notes:** $3 per 1,000 audio minutes.
 - **Per-account daily caps:** 8 scans, 80 clips, 120 price batches, 10 reconciles, 600 glances, 30 evidence checks, 40 voice notes, and 60 connected files.
 
@@ -139,6 +142,8 @@ The 20% wear floor still applies. When there is no age, only the damage is deduc
 
 **The category check.** The reconcile at Done now runs for every scan, including a single clip. Besides repeats and room titles, it returns category fixes, chosen by what the object is rather than the room it is in. A fix is applied only to a listed category, and it is logged with the source "check." The cash value is recomputed on that kind's useful life.
 
+**Brands, model numbers, and the frame.** The same check can fill an empty brand, model number, serial, color, or description. It may use only what that line already says or what was spoken during that line's clip. It does not copy a brand from another object, and it does not turn a likely brand into a confirmed one. A filled brand, model, color, or description sends that line back to be priced. A serial is stored on the line and is not put in the price search. Each line's thumbnail is the second that object is clearest. A second shared by two lines in the same room is dropped, and a saved line does not show the opening frame of a longer clip when its only time is 0.
+
 A line under $100 that is grouped with others does not keep one piece's damage note, and that damage is not taken off the group price. The group is marked worn instead.
 
 A likely brand never marks the model as settled. "Undamaged" and "not new" are not read as damaged or new. When the same object is joined, an age or a worse condition from the other clip recomputes the cash value. The useful life used for that cash value is kept on the line, so a later damage note does not switch the schedule.
@@ -165,7 +170,16 @@ The claim file's schema version is now 2. Its lines carry `likelyBrand` (with `c
 4. A reasoning-effort experiment (H-003 in `docs/EXPERIMENTS.md`): low against medium for listing, scored by `scripts/eval/run.ts`, to see whether medium is worth about 15 seconds per clip.
 5. A frame per line saved at review time, so a line keeps its picture when the clip is deleted.
 
-## 4. How we will know it worked
+## 4. Next, in order
+
+Updated 2026-11-01 from Test 5 and the confidence rules.
+
+1. **One still for a line over $250 with no model.** After the pictures save, up to six of those lines are read again from the still, not from the whole video. A version is written only when that still supports it. Two versions that both fit stay open for a receipt.
+2. **A price they state holds the comparable.** Replacement is not set above four times what they said they paid, unless a formal appraisal is on the line. No model number and no receipt means a comparable of that brand, type, color, and size.
+3. **Confidence is a tier.** Formal appraisal 99%. Receipt 99%. Model number 95%. Model name 90%. Brand plus one similar model 75%, which is enough to include the line in the assessed value. A self declared value is theirs, shown in red, and is not the scan's price.
+4. **Score one room, then film the demo as three close-ups and the download.** The metrics log is `docs/SCAN_METRICS.md`.
+
+## 5. How we will know it worked
 
 - On the same 11-clip walkthrough: the last line is listed within 60 seconds of Done; the ledger shows zero failed clips after retries; the hot tub, grill, sectional, TV, phone, and daybed each appear once; the outdoor rooms are one or two titles; the antique shows $250 from you; and the 2021 sectional shows about five years of depreciation.
 - The harness passes the new checks: clip queue order, salvage, tag stripping, year parsing, label-request rules, the reconcile limits, price application, and receipt-only verification.

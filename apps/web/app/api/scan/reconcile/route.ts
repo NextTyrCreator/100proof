@@ -23,6 +23,7 @@ const bodySchema = z.object({
       }),
     )
     .max(300),
+  spoken: z.array(z.object({ at: z.string().max(40), text: z.string().trim().max(200) })).max(80).optional().catch([]),
   inventoryId: uuidSchema.nullable(),
 });
 
@@ -36,12 +37,12 @@ export async function POST(request: Request) {
 
   const calls: ModelCall[] = [];
   try {
-    const answer = await reconcileLines(data.user.id, body.data.lines, calls);
+    const answer = await reconcileLines(data.user.id, body.data.lines, calls, body.data.spoken ?? []);
     await recordCalls(supabase, body.data.inventoryId, calls);
     return NextResponse.json(answer);
   } catch (error) {
     await recordCalls(supabase, body.data.inventoryId, calls);
     console.warn(`[scan] reconcile failed: ${failureCode(error)}`);
-    return NextResponse.json({ same: [], rooms: [], fix: [] });
+    return NextResponse.json({ same: [], rooms: [], fix: [], marks: [] });
   }
 }

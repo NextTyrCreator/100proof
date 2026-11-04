@@ -5,6 +5,8 @@ import { conditionSchema, damageSchema, normLabel, revalue, worseCondition, wors
 export type ItemPatch = {
   userNote?: string;
   userValueUsd?: number | null;
+  appraisalUsd?: number | null;
+  selfDeclaredUsd?: number | null;
   photoUrl?: string | null;
   photoPath?: string | null;
   priceUsd?: number | null;
@@ -23,6 +25,9 @@ export type ItemPatch = {
   condition?: Condition | null;
   damage?: Damage | null;
   usefulLifeYears?: number | null;
+  hidden?: boolean;
+  declared?: boolean;
+  files?: RoomItem["files"];
 };
 
 export type ReviewMode = "replace" | "append" | "continue" | "focus";
@@ -73,6 +78,8 @@ const TRACKED = [
   "valueBasis",
   "category",
   "condition",
+  "hidden",
+  "declared",
 ] as const;
 
 function damageText(damage: Damage | null) {
@@ -317,12 +324,33 @@ export function applyPatch(item: RoomItem, patch: ItemPatch): RoomItem | null {
       : patch.usefulLifeYears === null
         ? { success: true as const, data: null }
         : z.number().finite().positive().max(80).safeParse(patch.usefulLifeYears);
-  const checks = [note, price, replacement, cash, photo, photoPath, basis, brand, markings, worn, source, serial, pricedAt, ageYears, count, condition, damage, usefulLifeYears];
+  const files =
+    patch.files === undefined
+      ? undefined
+      : z
+          .array(
+            z.object({
+              id: z.string().uuid(),
+              name: z.string().trim().min(1).max(120),
+              path: z.string().min(1).max(300),
+              mediaType: z.string().max(80),
+              url: z.string().max(2_000).nullable(),
+            }),
+          )
+          .max(8)
+          .safeParse(patch.files);
+  const hidden = patch.hidden === undefined ? undefined : z.boolean().safeParse(patch.hidden);
+  const declared = patch.declared === undefined ? undefined : z.boolean().safeParse(patch.declared);
+  const selfDeclared = money(patch.selfDeclaredUsd);
+  const appraisal = money(patch.appraisalUsd);
+  const checks = [note, price, replacement, cash, photo, photoPath, basis, brand, markings, worn, source, serial, pricedAt, ageYears, count, condition, damage, usefulLifeYears, files, hidden, declared, selfDeclared, appraisal];
   if (checks.some((check) => check && !check.success)) return null;
   const next: RoomItem = {
     ...item,
     userNote: note?.success ? note.data : item.userNote,
     userValueUsd: price?.success ? price.data : item.userValueUsd,
+    appraisalUsd: appraisal?.success ? appraisal.data : item.appraisalUsd,
+    selfDeclaredUsd: selfDeclared?.success ? selfDeclared.data : item.selfDeclaredUsd,
     photoUrl: photo?.success ? photo.data : item.photoUrl,
     photoPath: photoPath?.success ? photoPath.data : item.photoPath,
     priceUsd: replacement?.success ? replacement.data : item.priceUsd,
@@ -341,6 +369,9 @@ export function applyPatch(item: RoomItem, patch: ItemPatch): RoomItem | null {
     condition: condition?.success ? condition.data : item.condition,
     damage: damage?.success ? damage.data : item.damage,
     usefulLifeYears: usefulLifeYears?.success ? usefulLifeYears.data : item.usefulLifeYears,
+    files: files?.success ? files.data : item.files,
+    hidden: hidden?.success ? hidden.data : item.hidden,
+    declared: declared?.success ? declared.data : item.declared,
   };
   if (next.damage) next.condition = "damaged";
   if (next.brand) next.likelyBrand = null;

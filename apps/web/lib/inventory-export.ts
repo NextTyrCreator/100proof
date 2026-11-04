@@ -9,6 +9,7 @@ import {
   type HomeInventory,
 } from "./inventory";
 import { accuracyMark } from "./accuracy-mark";
+import { assessedReplacement, lineConfidence } from "./line-confidence";
 import { documentMeasures } from "./inventory-measures";
 import { STANDARD } from "./standard";
 
@@ -46,7 +47,7 @@ function inventoryJson(inventory: HomeInventory) {
     })),
     rooms: inventory.rooms.map((room) => ({
       title: room.title,
-      lines: room.items.map((item) => ({
+      lines: room.items.filter((item) => !item.hidden).map((item) => ({
         id: item.id,
         name: item.name,
         count: item.count,
@@ -93,9 +94,14 @@ function inventoryJson(inventory: HomeInventory) {
             missing: mark.signals.filter((signal) => !signal.met).map((signal) => signal.key),
             receiptConfirmed: mark.receiptConfirmed,
             next: mark.next,
+            confidence: lineConfidence(item).percent,
+            confidenceLabel: lineConfidence(item).label,
+            assessed: lineConfidence(item).assessed,
           };
         })(),
         changes: item.changes.map((entry) => ({ at: entry.at, by: entry.source, before: entry.before, after: entry.after })),
+        declared: item.declared,
+        files: item.files.map((file) => file.name),
         note: item.userNote,
       })),
     })),
@@ -110,6 +116,8 @@ function inventoryJson(inventory: HomeInventory) {
     totals: {
       replacementUsd: replacementTotal(inventory),
       cashValueUsd: cashValueTotal(inventory),
+      assessedReplacementUsd: assessedReplacement(inventory.rooms.flatMap((room) => room.items).filter((item) => !item.hidden)),
+      withheld: inventory.rooms.reduce((sum, room) => sum + room.items.filter((item) => item.hidden).length, 0),
     },
     measures,
     audit: {
@@ -117,7 +125,7 @@ function inventoryJson(inventory: HomeInventory) {
       generatedAt: new Date().toISOString(),
       recordHash: inventory.recordHash,
       provenance:
-        "Every line keeps camera sightings, owner statements, receipt values, valuation basis, and changes with their sources, kept apart. Open items are listed as exceptions, not hidden.",
+        "Every reported line keeps camera sightings, owner statements, receipt values, valuation basis, and changes with their sources, kept apart. A line the owner hid is left out, and its value is not in the totals. Open items are listed as exceptions.",
       reliance:
         "Prepared for review. 100proof does not decide coverage or payment; the carrier does. Prices are estimates at the priced date.",
     },

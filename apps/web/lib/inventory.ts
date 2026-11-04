@@ -1,4 +1,5 @@
 import { addressRegionLabel } from "./address-search";
+import { assessedReplacement, lineConfidence } from "./line-confidence";
 
 /** Ordinary goods at or above this replacement price are their own row. Under it, they are grouped. */
 export const GROUP_UNDER_USD = 100;
@@ -56,6 +57,15 @@ export type Damage = { note: string; severity: DamageSeverity; clipId: string | 
 
 /** The maker the evidence points to when no name was read or spoken. It never settles the identity. */
 export type LikelyBrand = { name: string; clues: string };
+
+/** A file kept with one line. `url` is a signed link for this session, or a local preview. It is not saved. */
+export type ItemFile = {
+  id: string;
+  name: string;
+  path: string;
+  mediaType: string;
+  url: string | null;
+};
 
 /** One change to a line and the evidence that caused it. */
 export type ItemChange = {
@@ -124,8 +134,18 @@ export type RoomItem = {
   userNote: string;
   /** What the person says it costs. Kept apart from the replacement estimate. */
   userValueUsd: number | null;
+  /** A formal appraisal or certification. It can set the value above a price they paid. */
+  appraisalUsd: number | null;
+  /** A value the person states themselves. Shown as self declared, not as the scan's price. */
+  selfDeclaredUsd: number | null;
   photoUrl: string | null;
   photoPath: string | null;
+  /** A receipt, PDF, or other file the owner attached. The URL is signed for this session and is not saved. */
+  files: ItemFile[];
+  /** The owner stated this line is theirs. */
+  declared: boolean;
+  /** Left out of the report. The line stays on the account until it is deleted. */
+  hidden: boolean;
   highValue: boolean;
   sightings: Sighting[];
   said: SaidFact[];
@@ -269,9 +289,15 @@ export function enteredTotal(items: EnteredItem[]) {
   return items.reduce((sum, item) => sum + (item.value ?? 0), 0);
 }
 
+/** A hidden line stays on the account and is left out of totals and the report. */
+function lineIsReported(item: RoomItem) {
+  return !item.hidden;
+}
+
 export function replacementTotal(inventory: HomeInventory) {
   const itemized = inventory.rooms.reduce(
-    (sum, room) => sum + room.items.reduce((roomSum, item) => roomSum + (item.priceUsd ?? 0) * item.count, 0),
+    (sum, room) =>
+      sum + room.items.reduce((roomSum, item) => (lineIsReported(item) ? roomSum + (item.priceUsd ?? 0) * item.count : roomSum), 0),
     0,
   );
   return itemized;
@@ -308,8 +334,13 @@ export function userEnteredItem(name: string, count: number, note: string): Room
     sourceUrl: null,
     userNote: note,
     userValueUsd: null,
+    appraisalUsd: null,
+    selfDeclaredUsd: null,
     photoUrl: null,
     photoPath: null,
+    files: [],
+    declared: true,
+    hidden: false,
     highValue: false,
     sightings: [],
     said: [],
@@ -325,7 +356,8 @@ export function userEnteredItem(name: string, count: number, note: string): Room
 
 export function cashValueTotal(inventory: HomeInventory) {
   return inventory.rooms.reduce(
-    (sum, room) => sum + room.items.reduce((roomSum, item) => roomSum + (item.cashValueUsd ?? 0) * item.count, 0),
+    (sum, room) =>
+      sum + room.items.reduce((roomSum, item) => (lineIsReported(item) ? roomSum + (item.cashValueUsd ?? 0) * item.count : roomSum), 0),
     0,
   );
 }
@@ -344,6 +376,8 @@ function evidenceSources(item: RoomItem) {
   if (item.userValueUsd != null) sources.push("receipt or price paid");
   if (item.valueBasis) sources.push(item.valueBasis.startsWith("Exact:") ? "exact product" : "comparable");
   if (item.enteredBy === "you" || item.changes.some((entry) => entry.source === "your edit")) sources.push("you");
+  if (item.declared) sources.push("declared by you");
+  if (item.files.length > 0) sources.push(`file ×${item.files.length}`);
   return sources;
 }
 
@@ -439,6 +473,7 @@ export function inventoryCsv(inventory: HomeInventory) {
 
   for (const room of inventory.rooms) {
     for (const item of room.items) {
+      if (!lineIsReported(item)) continue;
       rows.push(
         [
           ...shared,
@@ -532,6 +567,9 @@ export function proofText(inventory: HomeInventory) {
     inventory.recordHash ? `Record hash: ${inventory.recordHash}` : "Record hash: not sealed.",
     locationProofLine(inventory),
     "",
+    `Assessed value: ${formatMoney(assessedReplacement(inventory.rooms.flatMap((room) => room.items).filter(lineIsReported)))}.`,
+    "A line at 75% or above is in that total. A model number from the walk is 95%. A model name is 90%. A brand and one similar model is 75%. A receipt is 99% and is the evidence for the price paid. A line under 75% is listed and is not in the assessed value. This file does not decide coverage.",
+    "",
   ];
 
   if (inventory.items.length === 0 && inventory.clips.length === 0 && inventory.rooms.length === 0) {
@@ -543,28 +581,36 @@ export function proofText(inventory: HomeInventory) {
     for (const room of inventory.rooms) {
       lines.push(room.title);
       for (const item of room.items) {
+        if (!lineIsReported(item)) continue;
         const price = item.priceUsd == null ? "no replacement amount yet" : `${formatMoney(item.priceUsd)} to replace`;
         const cash = item.cashValueUsd == null ? "" : ` · cash value ${formatMoney(item.cashValueUsd)}`;
         const yourPrice = item.userValueUsd == null ? "" : ` · you entered ${formatMoney(item.userValueUsd)}`;
         const who = item.enteredBy === "you" ? " · entered by you" : item.grouped ? " · grouped" : "";
-        lines.push(`  ${item.name} × ${item.count} · ${price}${cash}${yourPrice}${who}`);
+        const declared = item.declared ? " · declared by you" : "";
+        const confidence = lineConfidence(item);
+        const score = confidence.percent == null ? "" : ` · ${confidence.percent}% ${confidence.label}`;
+        lines.push(`  ${item.name} × ${item.count} · ${price}${cash}${yourPrice}${who}${declared}${score}`);
         const traits = [item.brand, item.markings, item.category, item.wearer, item.sizeBand, item.color, item.size, item.age].filter(Boolean).join(" · ");
         if (traits) lines.push(`  ${traits}`);
         if (item.likelyBrand) lines.push(`  Likely ${item.likelyBrand.name}, not confirmed: ${item.likelyBrand.clues}`);
         if (item.condition) lines.push(`  Condition: ${item.condition}${item.damage ? ` · ${item.damage.severity} damage: ${item.damage.note}` : ""}`);
         if (item.detail) lines.push(`  ${item.detail}`);
         if (item.said.length > 0) {
-          for (const fact of item.said.slice(0, 3)) lines.push(`  ${fact.heard === "typed" ? "You answered" : "You said"}: ${fact.text}`);
+          for (const fact of item.said.slice(0, 3)) lines.push(`  Stated on the walkthrough: ${fact.text}`);
         } else if (item.narration) {
-          lines.push(`  You said: ${item.narration}`);
+          lines.push(`  Stated on the walkthrough: ${item.narration}`);
         }
         if (!item.countSettled || !item.identitySettled) {
           lines.push(`  Still open: ${[!item.countSettled ? "count" : "", !item.identitySettled ? "model" : ""].filter(Boolean).join(" and ")}`);
         }
         if (item.depreciationNote) lines.push(`  ${item.depreciationNote}`);
         if (item.valueBasis) lines.push(`  ${item.valueBasis}`);
+        if (!item.changes.some((entry) => entry.source === "receipt photo") && item.sourceUrl) {
+          lines.push(`  Verification source: ${item.sourceUrl}`);
+        }
         if (item.serial) lines.push(`  Serial: ${item.serial}`);
-        if (item.userNote) lines.push(`  Note: ${item.userNote}`);
+        if (item.selfDeclaredUsd != null) lines.push(`  Self declared value: ${formatMoney(item.selfDeclaredUsd)}`);
+        if (item.appraisalUsd != null) lines.push(`  Formal appraisal: ${formatMoney(item.appraisalUsd)}`);
         if (item.highValue) lines.push("  High value");
       }
     }

@@ -8,6 +8,8 @@ import {
   normLabel,
   priceKey,
   revalue,
+  isNotProperty,
+  modelRecognized,
   worseCondition,
   worseDamage,
   type PricedLine,
@@ -29,7 +31,7 @@ function withoutSerial(text: string, serial: string | null) {
 }
 
 function priceGroupKey(item: RoomItem) {
-  const described = [item.itemType, item.brand, item.markings].filter(Boolean).join(" ");
+  const described = [item.itemType, item.brand, item.markings, item.detail].filter(Boolean).join(" ");
   return priceKey({ name: item.name, description: described || item.detail, color: item.color, size: item.size });
 }
 
@@ -80,6 +82,7 @@ export function linesToPrice(review: ReviewResult, alreadySent: Set<string>) {
   for (const room of review.rooms) {
     for (const item of room.items) {
       if (item.enteredBy !== "scan" || item.pricedAt != null) continue;
+      if (isNotProperty(item.name, item.itemType ?? "", item.detail)) continue;
       const key = priceGroupKey(item);
       if (alreadySent.has(key)) continue;
       const list = groups.get(key) ?? [];
@@ -122,7 +125,14 @@ function cashFor(item: RoomItem, replacement: number) {
   return depreciate(replacement, item.ageYears, life, item.condition, item.damage);
 }
 
-/** "Exact" means the brand and model on the line were read or stated. Anything else is a comparable. */
+/** A stated price holds the comparable. A formal appraisal is the only amount that may sit far above it. */
+export function heldNearPaid(paid: number | null, proposed: number, appraisal: number | null) {
+  if (appraisal != null && appraisal > 0) return { price: appraisal, held: false, appraisal: true };
+  if (paid != null && paid > 0 && proposed > paid * 4) {
+    return { price: Math.round(paid * 4 * 100) / 100, held: true, appraisal: false };
+  }
+  return { price: proposed, held: false, appraisal: false };
+}
 function checkedBasis(item: RoomItem, basis: string) {
   const text = basis.trim().slice(0, 300) || "Local replacement.";
   const confirmed = item.identitySettled && Boolean(item.brand || item.markings);
@@ -149,16 +159,22 @@ export function applyPrices(
       items: room.items.map((item) => {
         const hit = byId.get(item.id);
         if (!hit || hit.replacementUsd == null) return item;
-        const worn = cashFor(item, hit.replacementUsd);
+        const bounded = heldNearPaid(item.userValueUsd, hit.replacementUsd, item.appraisalUsd);
+        const worn = cashFor(item, bounded.price);
+        const basis = bounded.appraisal
+          ? "Appraisal: formal value on file."
+          : bounded.held
+            ? "Comparable: held near the price you stated. No formal appraisal on file."
+            : checkedBasis(item, hit.basis);
         return {
           ...item,
-          priceUsd: hit.replacementUsd,
+          priceUsd: bounded.price,
           cashValueUsd: worn.cash,
           depreciationNote: worn.note,
-          valueBasis: checkedBasis(item, hit.basis),
-          sourceUrl: httpUrl(hit.sourceUrl),
+          valueBasis: basis,
+          sourceUrl: bounded.held || bounded.appraisal ? item.sourceUrl : httpUrl(hit.sourceUrl),
           pricedAt,
-          highValue: hit.replacementUsd > HIGH_VALUE_OVER_USD,
+          highValue: bounded.price > HIGH_VALUE_OVER_USD,
         };
       }),
     })),
@@ -182,7 +198,7 @@ export function reconcileInput(review: ReviewResult, clipNumber: (clipId: string
           name: item.name.slice(0, 120),
           kind: (item.itemType ?? "").slice(0, 80),
           category: normLabel(item.category ?? "") || "other",
-          brand: item.brand ?? item.likelyBrand?.name ?? null,
+          brand: item.brand,
           clips,
           said: item.said[0]?.text.slice(0, 160) ?? null,
         };
@@ -253,6 +269,8 @@ function joinInto(keeper: RoomItem, other: RoomItem): RoomItem {
     userValueUsd: keeper.userValueUsd ?? other.userValueUsd,
     photoUrl: keeper.photoUrl ?? other.photoUrl,
     photoPath: keeper.photoPath ?? other.photoPath,
+    files: [...keeper.files, ...other.files.filter((file) => !keeper.files.some((kept) => kept.id === file.id))].slice(0, 8),
+    declared: keeper.declared || other.declared,
     userNote: [keeper.userNote, other.userNote].filter(Boolean).join(" ").slice(0, 500),
     priceUsd,
     cashValueUsd: priceFrom.cashValueUsd,
@@ -280,6 +298,61 @@ function joinInto(keeper: RoomItem, other: RoomItem): RoomItem {
     }
   }
   return joined;
+}
+
+function keptMark(value: string | null | undefined, max: number) {
+  const text = (value ?? "").trim();
+  if (!text || /^(none|unknown|n\/a|na|null)$/i.test(text)) return null;
+  return text.slice(0, max);
+}
+
+/** Fill brand, model, serial, color, and detail only where the line is still empty, then send a changed identity back to be priced. */
+function applyMarks(rooms: RoomShard[], marks: NonNullable<ReconcileAnswer["marks"]>) {
+  const byId = new Map(marks.map((mark) => [mark.id, mark]));
+  for (const room of rooms) {
+    room.items = room.items.map((item) => {
+      const mark = byId.get(item.id);
+      if (!mark || item.enteredBy !== "scan") return item;
+      const heardBrand = keptMark(mark.brand, 80);
+      const brand =
+        item.brand || !heardBrand || heardBrand.toLowerCase() === item.likelyBrand?.name.toLowerCase() ? null : heardBrand;
+      const markings = item.markings ? null : keptMark(mark.markings, 160);
+      const serial = item.serial ? null : keptMark(mark.serial, 80);
+      const color = item.color ? null : keptMark(mark.color, 40);
+      const detail = !item.detail || item.detail === item.name ? keptMark(mark.detail, 400) : null;
+      if (!brand && !markings && !serial && !color && !detail) return item;
+      const next: RoomItem = { ...item };
+      const before: ItemChange["before"] = {};
+      const after: ItemChange["after"] = {};
+      if (brand) {
+        next.brand = brand;
+        next.likelyBrand = null;
+        before.brand = item.brand;
+        after.brand = brand;
+      }
+      if (markings) {
+        next.markings = markings;
+        before.markings = item.markings;
+        after.markings = markings;
+        if (!(detail ?? "").toLowerCase().startsWith("likely model")) next.identitySettled = modelRecognized(next.brand, next.markings);
+      }
+      if (serial) {
+        next.serial = serial;
+        before.serial = item.serial;
+        after.serial = serial;
+      }
+      if (color) next.color = color;
+      if (detail) next.detail = detail;
+      if (brand || markings || color || detail) next.pricedAt = null;
+      if (Object.keys(after).length > 0) {
+        next.changes = [
+          ...item.changes,
+          { id: crypto.randomUUID(), at: new Date().toISOString(), source: "check" as const, evidenceRef: null, before, after },
+        ].slice(-40);
+      }
+      return next;
+    });
+  }
 }
 
 const KNOWN_CATEGORIES = new Set<string>(CATEGORIES);
@@ -359,6 +432,7 @@ export function applyReconcile(
   }
 
   const fixed = applyFixes(rooms, answer.fix ?? []);
+  applyMarks(rooms, answer.marks ?? []);
 
   const where = new Map<string, RoomShard>();
   for (const room of rooms) for (const item of room.items) where.set(item.id, room);

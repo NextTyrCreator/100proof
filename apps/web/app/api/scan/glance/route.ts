@@ -30,5 +30,7 @@ export async function POST(request: Request) {
   const calls: ModelCall[] = [];
   const seen = await glanceFrame(data.user.id, Buffer.from(await frame.arrayBuffer()), frame.type, calls);
   await recordCalls(supabase, inventoryId, calls);
+  const failed = calls.some((entry) => entry.call === "glance" && !entry.ok);
+  if (failed) return NextResponse.json({ seen: [] }, { status: 502 });
   return NextResponse.json({ seen }, { headers: { "Cache-Control": "private, no-store" } });
 }

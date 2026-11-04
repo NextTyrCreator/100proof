@@ -1,7 +1,7 @@
-/** One walkthrough session: 30-second clips, up to ten minutes of recording, pause to continue. */
+/** One walkthrough session: 30-second clips, up to fifteen minutes of recording, pause to continue. */
 
 export const CLIP_MS = 30_000;
-export const SCAN_LIMIT_MS = 10 * 60 * 1000;
+export const SCAN_LIMIT_MS = 15 * 60 * 1000;
 /** Scan more on an inventory that already has clips. */
 export const ADD_LIMIT_MS = 5 * 60 * 1000;
 const PAUSE_LIMIT_MS = 15 * 60 * 1000;

@@ -10,7 +10,7 @@ const EVIDENCE_SOURCES: ChangeSource[] = ["label photo", "receipt photo", "photo
  * Time to file runs from the first clip to the last change; it includes waiting, so it is an upper bound.
  */
 export function documentMeasures(inventory: HomeInventory) {
-  const lines = inventory.rooms.flatMap((room) => room.items);
+  const lines = inventory.rooms.flatMap((room) => room.items).filter((item) => !item.hidden);
   const open = openRequests(inventory.rooms);
   const openLines = new Set(open.map((request) => request.itemId)).size;
   const settled = lines.filter((item) => item.countSettled && item.identitySettled).length;

@@ -25,7 +25,11 @@ export function toSaveRequest(inventory: HomeInventory, events: ItemEvent[]): Sa
     locationCheck: checkedAt ? { checkedAt, within } : null,
     rooms: inventory.rooms.map((room) => ({
       ...room,
-      items: room.items.map((item) => ({ ...item, photoUrl: null })),
+      items: room.items.map((item) => ({
+        ...item,
+        photoUrl: null,
+        files: item.files.map((file) => ({ ...file, url: null })),
+      })),
     })),
     clips: inventory.clips.map((clip) => ({
       id: clip.id,

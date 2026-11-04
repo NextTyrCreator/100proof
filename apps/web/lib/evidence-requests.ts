@@ -83,6 +83,7 @@ export function openRequests(rooms: RoomShard[]): EvidenceRequest[] {
   const requests: EvidenceRequest[] = [];
   for (const room of rooms) {
     for (const item of room.items) {
+      if (item.hidden) continue;
       for (const kind of ["label", "wider", "receipt", "question"] as const) {
         if (!open(item, kind)) continue;
         const doubt =
@@ -110,9 +111,4 @@ export function openRequests(rooms: RoomShard[]): EvidenceRequest[] {
     }
   }
   return requests.sort((a, b) => b.score - a.score);
-}
-
-/** Lines that are still open after their requests, for the exception list. */
-export function unresolvedCount(rooms: RoomShard[]) {
-  return new Set(openRequests(rooms).map((request) => request.itemId)).size;
 }

@@ -60,22 +60,22 @@ export function accuracyMark(item: RoomItem): AccuracyMark {
   let label: string;
   if (item.enteredBy === "you") {
     tier = "entered";
-    label = "Entered by you — not from the scan";
+    label = "Declared by you — not from the walkthrough";
   } else if (receiptConfirmed) {
     tier = "receipt";
     label = "Receipt verified — this item, this owner";
   } else if (item.countSettled && item.identitySettled && item.priceUsd != null && corroborations >= 2) {
     tier = "strong";
-    label = "Strong — no receipt";
+    label = "Replacement supported, no receipt";
   } else if (item.countSettled && item.identitySettled && item.priceUsd != null) {
     tier = "settled";
-    label = "Settled on camera";
+    label = "Identified on the walkthrough";
   } else if (item.countSettled && item.priceUsd != null && item.sightings.length > 0) {
     tier = "settled";
-    label = "Estimated from video";
+    label = "Replacement estimated";
   } else {
     tier = "open";
-    label = "Needs evidence";
+    label = "Needs more support";
   }
 
   const next = !item.countSettled
@@ -85,7 +85,7 @@ export function accuracyMark(item: RoomItem): AccuracyMark {
       : item.priceUsd == null
         ? "A price for this line"
         : !receiptConfirmed
-          ? "A receipt, from a photo or Connections"
+          ? "Add the receipt here, or connect the account, to verify this line another way"
           : null;
 
   return { tier, label, signals, met, total: signals.length, next, receiptConfirmed };
@@ -103,6 +103,9 @@ export function accuracySummary(items: RoomItem[]) {
     settled: count("settled"),
     open: count("open"),
     entered: count("entered"),
+    withModel: items.filter((item) => Boolean(item.markings)).length,
+    withBrand: items.filter((item) => Boolean(item.brand)).length,
+    located: items.filter((item) => item.sightings.some((sighting) => sighting.clipId && sighting.atSec != null)).length,
     strongWithoutReceiptShare:
       withoutReceipt.length === 0 ? null : Math.round((strongWithoutReceipt / withoutReceipt.length) * 100) / 100,
     averageSignals: marks.length === 0 ? null : Math.round((marks.reduce((sum, mark) => sum + mark.met, 0) / marks.length) * 10) / 10,
