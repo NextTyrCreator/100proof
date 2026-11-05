@@ -65,15 +65,17 @@ Acceptance cases the harness runs: 60 correct and no extras is 100.0% and PASS. 
 
 ## How a run is recorded
 
-Each run keeps: date, build, baseline version, the per-entry credited counts, duplicate / phantom / improper units, unexposed units, pending units, included units, and the reviewer's notes. The raw automatic output is kept unchanged; the reviewed inventory is a separate version, and a manual correction never improves the historical automatic score.
+Each run keeps: date, build, baseline version, whether reminders were on, the per-entry credited counts, duplicate / phantom / improper units, unexposed units, pending units, included units, and the reviewer's notes. The raw automatic output is kept unchanged; the reviewed inventory is a separate version, and a manual correction never improves the historical automatic score.
 
-| Run | Date | Build | TP | FN | FP | Match | Capture | Precision | Result | Notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 01 | | | | | | | | | | |
-| 02 | | | | | | | | | | |
-| 03 | | | | | | | | | | |
-| 04 | | | | | | | | | | |
-| 05 | | | | | | | | | | |
+**Reminders** is the scorer's checkbox: tick it (☑) when the what-belongs-here reminders were on during that walk, and leave it empty (☐) when they were off. A reminder can lead the person to film more, so the setting is part of the run. In code it is `remindersOn` on the run (`scoreRun`). All five runs in a series use the same setting, and `scoreSeries` rejects a series that mixes them. The checkbox is only on the scorecard. It changes nothing a person sees or does during a scan.
+
+| Run | Date | Build | Reminders | TP | FN | FP | Match | Capture | Precision | Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 01 | | | ☐ | | | | | | | | |
+| 02 | | | ☐ | | | | | | | | |
+| 03 | | | ☐ | | | | | | | | |
+| 04 | | | ☐ | | | | | | | | |
+| 05 | | | ☐ | | | | | | | | |
 
 No run has been scored yet. Repeatability is the five-run series below. Every failed run and its build are kept.
 

@@ -40,3 +40,7 @@ The file a person sends now says what is uncertain instead of hiding it, and it 
 The JSONB document limits server-side queries over items. The event log and the export cover what a reviewer needs today.
 
 Transcription adds a call per clip, $3 per 1,000 audio minutes, and about 1 MB of upload per 30 seconds. If the WAV tap fails on a device (iOS AudioContext after the camera opens is not yet tested on a phone), the clip is still reviewed with the video's own audio.
+
+## Amended 2026-11-04
+
+Scans now run up to 15 minutes (30 clips). Scan more adds up to 5. See CHANGELOG.

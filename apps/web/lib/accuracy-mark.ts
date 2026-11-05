@@ -1,5 +1,5 @@
-import { labelWorthAsking } from "./evidence-requests";
 import type { RoomItem } from "./inventory";
+import { lineConfidence, nextEvidence, receiptVerified } from "./line-confidence";
 
 /**
  * The accuracy mark for one line. It is not a measured accuracy percentage and it is never shown as one.
@@ -28,11 +28,6 @@ function hasSource(item: RoomItem, sources: string[]) {
   return item.changes.some((entry) => sources.includes(entry.source));
 }
 
-/** A receipt picture or a matched receipt file changed this line. */
-export function receiptVerified(item: RoomItem) {
-  return item.changes.some((entry) => entry.source === "receipt photo" && entry.after.userValueUsd != null);
-}
-
 export function accuracyMark(item: RoomItem): AccuracyMark {
   const clipsSeen = new Set(item.sightings.filter((sighting) => sighting.clipId).map((sighting) => sighting.clipId));
   const receiptConfirmed = receiptVerified(item);
@@ -56,39 +51,21 @@ export function accuracyMark(item: RoomItem): AccuracyMark {
     ["secondLook", "spoken", "label", "serial", "paid", "exactPrice"].includes(signal.key) && signal.met,
   ).length;
 
-  let tier: AccuracyTier;
-  let label: string;
-  if (item.enteredBy === "you") {
-    tier = "entered";
-    label = "Declared by you — not from the walkthrough";
-  } else if (receiptConfirmed) {
-    tier = "receipt";
-    label = "Receipt verified — this item, this owner";
-  } else if (item.countSettled && item.identitySettled && item.priceUsd != null && corroborations >= 2) {
-    tier = "strong";
-    label = "Replacement supported, no receipt";
-  } else if (item.countSettled && item.identitySettled && item.priceUsd != null) {
-    tier = "settled";
-    label = "Identified on the walkthrough";
-  } else if (item.countSettled && item.priceUsd != null && item.sightings.length > 0) {
-    tier = "settled";
-    label = "Replacement estimated";
-  } else {
-    tier = "open";
-    label = "Needs more support";
-  }
+  // The tier and the words follow the line's one confidence number, so the evidence panel never
+  // says something different from the chip, the ledger, or the assessed total.
+  const confidence = lineConfidence(item);
+  const tier: AccuracyTier = receiptConfirmed
+    ? "receipt"
+    : confidence.tier === "stated"
+      ? "entered"
+      : confidence.assessed
+        ? corroborations >= 2
+          ? "strong"
+          : "settled"
+        : "open";
+  const label = confidence.percent == null ? confidence.label : `${confidence.percent}% · ${confidence.label}`;
 
-  const next = !item.countSettled
-    ? "A wider clip that shows every one"
-    : !item.identitySettled && labelWorthAsking(item)
-      ? "A close photo of the label"
-      : item.priceUsd == null
-        ? "A price for this line"
-        : !receiptConfirmed
-          ? "Add the receipt here, or connect the account, to verify this line another way"
-          : null;
-
-  return { tier, label, signals, met, total: signals.length, next, receiptConfirmed };
+  return { tier, label, signals, met, total: signals.length, next: nextEvidence(item, confidence), receiptConfirmed };
 }
 
 /** Counts across an inventory. noReceiptStrong is the headline: settled hard, without asking for a receipt. */

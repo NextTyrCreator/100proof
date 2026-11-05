@@ -6,7 +6,7 @@ Checked 2026-10-29. This is the record for the hook, the figures, the accuracy g
 
 Most people are underinsured. Don't be like them. Take a video. Get an automated inventory with verified proof, and insure it properly.
 
-The name 100proof is the brand. It means a record you can show. It is not a timer, and it is not a claim that the list is 100% accurate. A scan records up to 10 minutes, in 30-second clips, and a later scan of the same inventory adds up to 5 more. Do not write “in 100 seconds” as the product limit. Do not write “100% accurate,” “100% proof” as a measured score, or that 100proof decides coverage or binds a policy. The honest close is that the person uses the inventory to insure properly. The carrier still decides what the policy pays.
+The name 100proof is the brand. It means a record you can show. It is not a timer, and it is not a claim that the list is 100% accurate. A scan records up to 15 minutes, in 30-second clips, and Scan more on the same inventory adds up to 5 more. Do not write “in 100 seconds” as the product limit. Do not write “100% accurate,” “100% proof” as a measured score, or that 100proof decides coverage or binds a policy. The honest close is that the person uses the inventory to insure properly. The carrier still decides what the policy pays.
 
 ## Hackathon
 
@@ -67,7 +67,7 @@ Likability is a short path and an app that asks a fair question. It never asks f
 
 These stay:
 
-- A scan is up to 10 minutes, and a later scan adds up to 5. It is filmed in 30-second clips. The person can pause and record again until they are done, or until the session sits for 15 minutes.
+- A scan is up to 15 minutes, and Scan more adds up to 5. It is filmed in 30-second clips. The person can pause and record again until they are done, or until the session sits for 15 minutes.
 - A photo snapped onto a line is sent through the same review and can reprice that line. A serial may identify the product. It is not placed in the price search.
 - Another clip can be added to the same inventory. Clips are reviewed in the order they were filmed, and the lines are combined. The same object still in frame does not become a second row.
 - The thing people pay for is the verification: property, equipment, and items, with the video kept beside the list. The carrier, buyer, or lender still decides what the record is worth. 100proof does not bind a policy and does not claim the list is 100% accurate.

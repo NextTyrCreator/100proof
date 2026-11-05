@@ -20,6 +20,7 @@ const lineSchema = z.object({
   color: z.string().trim().max(40).nullable(),
   size: z.string().trim().max(40).nullable(),
   options: z.array(valueOptionSchema).max(3),
+  paidUsd: z.number().finite().nonnegative().max(1_000_000).nullable().optional(),
 });
 
 const bodySchema = z.object({

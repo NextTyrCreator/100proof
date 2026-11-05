@@ -6,6 +6,11 @@ export const SCAN_LIMIT_MS = 15 * 60 * 1000;
 export const ADD_LIMIT_MS = 5 * 60 * 1000;
 const PAUSE_LIMIT_MS = 15 * 60 * 1000;
 const MAX_CLIPS = SCAN_LIMIT_MS / CLIP_MS;
+/**
+ * The highest clip number a review accepts. Clip 1 is what counts against the daily review limit,
+ * so a later clip must never be read as clip 1.
+ */
+export const CLIP_NUMBER_LIMIT = MAX_CLIPS + ADD_LIMIT_MS / CLIP_MS;
 
 export type CloseReason = "next" | "pause" | "finish";
 

@@ -36,3 +36,7 @@ Review should keep pace with filming: about 40–45 s per clip with two in fligh
 The live scanner adds up to 15 small image calls a minute while recording. It stops when the tab is hidden or the camera stops.
 
 PDF reading by Muse Spark 1.3 through `input_file` has not been tried against the API in this build. Images use the same path as label photos.
+
+## Amended 2026-11-04
+
+Scans now run up to 15 minutes (30 clips). Scan more adds up to 5. Room chips set the room per clip. See CHANGELOG.

@@ -37,7 +37,7 @@ const caseSchema = z.object({
   clips: z
     .array(z.object({ video: z.string().max(300), audio: z.string().max(300).nullable().default(null) }))
     .min(1)
-    .max(20),
+    .max(30),
   truth: z.array(truthLineSchema).min(1).max(200),
   evidence: z.array(evidenceSchema).max(50).default([]),
   maxRequests: z.number().int().min(1).max(20).default(5),

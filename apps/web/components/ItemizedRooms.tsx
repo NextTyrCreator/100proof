@@ -2,7 +2,6 @@
 
 import { useMemo, useState, Fragment } from "react";
 import { sendEvidence, type EvidenceSend } from "../lib/evidence-client";
-import { openRequests, SHOWN_AT_ONCE, type EvidenceRequest } from "../lib/evidence-requests";
 import {
   formatClock,
   formatMoney,
@@ -15,12 +14,16 @@ import {
   type RoomItem,
   type SaidFact,
 } from "../lib/inventory";
-import { accuracyMark, receiptVerified } from "../lib/accuracy-mark";
-import { lineConfidence } from "../lib/line-confidence";
-import { isDecor, keptLineSchema } from "../lib/review-shape";
+import { accuracyMark } from "../lib/accuracy-mark";
+import { APPRAISAL_BASIS, appraisalDocumented, confidenceTone, lineConfidence, nextEvidence, receiptVerified } from "../lib/line-confidence";
+import { chipText, rowSubtitle, shortName } from "../lib/line-row";
+import { readOneLine, readsDisagree } from "../lib/read-twice";
+import { walkLabel, type WalkCompare } from "../lib/walk-compare";
+import { isDecor, keptLineSchema, revalue } from "../lib/review-shape";
 import { rememberKeptValues } from "../lib/kept-values";
 import type { ItemPatch } from "../lib/inventory-merge";
 import { ClipFrame } from "./ClipFrame";
+import { LineReplay } from "./LineReplay";
 import { VoiceNote } from "./VoiceNote";
 
 function safeHttp(value: string | null) {
@@ -88,26 +91,15 @@ function lineStory(item: RoomItem) {
         ? "Replacement cost is an estimate for this kind of item. No brand was applied."
         : "Replacement cost is not set yet.";
   const cash =
-    item.cashValueUsd != null && item.priceUsd != null && item.cashValueUsd !== item.priceUsd
-      ? " Actual cash value is lower, for age and condition."
-      : "";
+    item.priceUsd != null && item.cashValueUsd == null
+      ? " Actual cash value is not set until the age is known."
+      : item.cashValueUsd != null && item.priceUsd != null && item.cashValueUsd !== item.priceUsd
+        ? " Actual cash value is lower, for age and condition."
+        : "";
   const next = receiptVerified(item)
     ? " A receipt is already on this line."
     : " If you have the receipt or anything more, add it here or connect the account. That is how this line can be verified another way.";
   return `${maker} ${priced}${cash}${next}`;
-}
-
-type Chip = { label: string; tone: "verified" | "yours" | "exact" | "estimate" | "open" | "settled" };
-
-function chipFor(item: RoomItem): Chip {
-  if (receiptVerified(item)) return { label: "Receipt verified", tone: "verified" };
-  if (item.enteredBy === "you") return { label: "Added by you", tone: "yours" };
-  if (!item.countSettled) return { label: "Count open", tone: "open" };
-  if (item.priceUsd == null) return { label: "No price yet", tone: "open" };
-  if (item.userValueUsd != null) return { label: "Amount paid", tone: "yours" };
-  if (item.valueBasis?.startsWith("Exact:")) return { label: "Exact replacement", tone: "exact" };
-  if (!item.identitySettled) return { label: item.skipped.includes("label") ? "Estimate accepted" : "Replacement estimated", tone: "estimate" };
-  return { label: "Identified on the walkthrough", tone: "settled" };
 }
 
 function initials(name: string) {
@@ -130,10 +122,9 @@ export function ItemizedRooms({
   onUpdateItem,
   onAddItem,
   onEvidence,
-  onSkip,
   onSaveMedia,
-  onFilmFocus,
-  onScanMore,
+  onResolveIdentity,
+  walk = null,
 }: {
   inventoryId: string;
   rooms: HomeInventory["rooms"];
@@ -153,16 +144,14 @@ export function ItemizedRooms({
     evidenceRef: string | null,
     said?: SaidFact,
   ) => void;
-  onSkip: (inventoryId: string, roomId: string, itemId: string, kind: EvidenceKind) => void;
   onSaveMedia: (inventoryId: string, name: string, blob: Blob) => Promise<string | null>;
-  /** Film another clip to settle these lines. Absent while the first scan is still on screen. */
-  onFilmFocus?: (itemIds: string[]) => void;
-  /** Add up to five more minutes to this inventory. */
-  onScanMore?: () => void;
+  /** The owner's pick when the two identity reads disagree. */
+  onResolveIdentity?: (itemId: string, pick: "a" | "b" | "neither") => void;
+  /** The last Scan more walk compared with these lines. */
+  walk?: WalkCompare | null;
 }) {
   const [lineError, setLineError] = useState<{ id: string; text: string } | null>(null);
   const [checkingId, setCheckingId] = useState("");
-  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [renaming, setRenaming] = useState("");
   const [confirmDelete, setConfirmDelete] = useState("");
   const [lineFilter, setLineFilter] = useState<"all" | "attention" | "hidden">("all");
@@ -170,26 +159,17 @@ export function ItemizedRooms({
   const [addedCount, setAddedCount] = useState("1");
   const [addedNote, setAddedNote] = useState("");
 
-  const requests = useMemo(() => openRequests(rooms), [rooms]);
   const clipById = useMemo(() => new Map(clips.map((clip, index) => [clip.id, { clip, number: index + 1 }])), [clips]);
   const totals = useMemo(() => {
     const lines = rooms.flatMap((room) => room.items).filter((item) => !item.hidden);
     return {
-      lines: lines.length,
-      replacement: lines.reduce((sum, item) => sum + (item.priceUsd ?? 0) * item.count, 0),
-      verified: lines.filter(receiptVerified).length,
-      assessed: lines.filter((item) => lineConfidence(item).assessed).length,
       hidden: rooms.reduce((sum, room) => sum + room.items.filter((item) => item.hidden).length, 0),
       attention: lines.filter((item) => {
         const confidence = lineConfidence(item);
-        return !confidence.assessed && (confidence.needsReceipt || accuracyMark(item).next != null);
+        return !confidence.assessed && (confidence.needsReceipt || nextEvidence(item, confidence) != null);
       }).length,
     };
   }, [rooms]);
-
-  function findItem(roomId: string, itemId: string) {
-    return rooms.find((room) => room.id === roomId)?.items.find((item) => item.id === itemId) ?? null;
-  }
 
   function keepPrice(item: RoomItem, amount: number) {
     const line = keptLineSchema.safeParse({
@@ -255,18 +235,6 @@ export function ItemizedRooms({
     }
   }
 
-  async function sendAnswer(request: EvidenceRequest) {
-    const item = findItem(request.roomId, request.itemId);
-    if (!item) return;
-    const sent = await answerFor(request.roomId, item, answers[request.key] ?? "", "typed");
-    if (sent) setAnswers((current) => ({ ...current, [request.key]: "" }));
-  }
-
-  function acceptEstimate(roomId: string, item: RoomItem) {
-    onSkip(inventoryId, roomId, item.id, "label");
-    if (item.ask?.kind === "question") onSkip(inventoryId, roomId, item.id, "question");
-  }
-
   function addItem() {
     const name = addedName.trim();
     const count = Number(addedCount);
@@ -281,11 +249,40 @@ export function ItemizedRooms({
     if (item.hidden) return null;
     const confidence = lineConfidence(item);
     if (confidence.assessed) return null;
+    if (confidence.caps.includes("statedConflict")) return nextEvidence(item, confidence);
     if (confidence.needsReceipt) return "Add the receipt. It confirms the model, the price paid, and the description.";
-    return accuracyMark(item).next;
+    return nextEvidence(item, confidence);
   }
 
-  async function attachFile(roomId: string, item: RoomItem, file: File) {
+  /** The appraisal counts at 99% only with its document on the line. Until then the amount is a stated price. */
+  function setAppraisal(roomId: string, item: RoomItem, amount: number | null) {
+    const documented = amount != null && appraisalDocumented({ ...item, appraisalUsd: amount });
+    if (!documented) {
+      onUpdateItem(inventoryId, roomId, item.id, { appraisalUsd: amount });
+      return;
+    }
+    const worn = revalue({ ...item, priceUsd: amount });
+    onUpdateItem(inventoryId, roomId, item.id, {
+      appraisalUsd: amount,
+      priceUsd: amount,
+      valueBasis: APPRAISAL_BASIS,
+      cashValueUsd: worn?.cash ?? null,
+      depreciationNote: worn?.note ?? null,
+    });
+  }
+
+  /** The year bought sets the age, and the age sets the cash value. Cleared, the cash value is unknown again. */
+  function setYearBought(roomId: string, item: RoomItem, text: string) {
+    const trimmed = text.trim();
+    const thisYear = new Date().getFullYear();
+    const year = Number(trimmed);
+    if (trimmed !== "" && (!/^\d{4}$/.test(trimmed) || year < 1900 || year > thisYear)) return;
+    const ageYears = trimmed === "" ? null : thisYear - year;
+    const worn = revalue({ ...item, ageYears });
+    onUpdateItem(inventoryId, roomId, item.id, { ageYears, cashValueUsd: worn?.cash ?? null, depreciationNote: worn?.note ?? null });
+  }
+
+  async function attachFile(roomId: string, item: RoomItem, file: File, asAppraisal = false) {
     const pdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
     const image = file.type.startsWith("image/");
     if ((!pdf && !image) || file.size > 8 * 1024 * 1024) {
@@ -304,11 +301,20 @@ export function ItemizedRooms({
       return;
     }
     setLineError(null);
+    const attached = { id: crypto.randomUUID(), name: file.name.slice(0, 120) || stored, path, mediaType: file.type || (pdf ? "application/pdf" : "image/jpeg"), url: URL.createObjectURL(file) };
+    const files = [...item.files, attached];
+    if (!asAppraisal) {
+      onUpdateItem(inventoryId, roomId, item.id, { files });
+      return;
+    }
+    const amount = item.appraisalUsd != null && item.appraisalUsd > 0 ? item.appraisalUsd : null;
+    const worn = amount == null ? null : revalue({ ...item, priceUsd: amount });
     onUpdateItem(inventoryId, roomId, item.id, {
-      files: [
-        ...item.files,
-        { id: crypto.randomUUID(), name: file.name.slice(0, 120) || stored, path, mediaType: file.type || (pdf ? "application/pdf" : "image/jpeg"), url: URL.createObjectURL(file) },
-      ],
+      files,
+      appraisalFileId: attached.id,
+      ...(amount == null
+        ? {}
+        : { priceUsd: amount, valueBasis: APPRAISAL_BASIS, cashValueUsd: worn?.cash ?? null, depreciationNote: worn?.note ?? null }),
     });
   }
 
@@ -327,122 +333,44 @@ export function ItemizedRooms({
     return frames;
   }
 
-  const top = requests.slice(0, SHOWN_AT_ONCE);
-  const wider = requests.filter((request) => request.kind === "wider").map((request) => request.itemId);
+  /** The seconds to replay: where the line was seen, or, for a line from the owner's words, where it was said. */
+  function replayFor(item: RoomItem) {
+    const seen = item.sightings.find((sighting) => sighting.clipId && sighting.atSec != null && clipById.get(sighting.clipId)?.clip.videoUrl);
+    const said = item.said.find((fact) => fact.clipId && fact.atSec != null && clipById.get(fact.clipId)?.clip.videoUrl);
+    const stated = /^stated, not seen/i.test(item.detail.trim());
+    const pick = stated ? (said ?? seen) : (seen ?? said);
+    if (!pick?.clipId || pick.atSec == null) return null;
+    const hit = clipById.get(pick.clipId);
+    if (!hit?.clip.videoUrl) return null;
+    return {
+      src: hit.clip.videoUrl,
+      atSec: pick.atSec,
+      durationMs: hit.clip.durationMs,
+      spoken: hit.clip.spoken,
+      label: `clip ${hit.number} at ${formatClock(pick.atSec * 1000)}${stated ? ", where it was said" : ""}`,
+    };
+  }
 
   return (
     <div className="stack inventory-lines">
-      <div className="lines-summary">
-        <p className="lines-summary-figures">
-          <span>
-            <strong>{totals.lines}</strong> {totals.lines === 1 ? "line" : "lines"}
-          </span>
-          <span>
-            <strong>{totals.replacement > 0 ? formatMoney(totals.replacement) : "—"}</strong> to replace
-          </span>
-          <span>
-            <strong>{totals.assessed}</strong> assessed
-          </span>
-          {totals.verified > 0 ? (
-            <span className="is-verified">
-              <strong>{totals.verified}</strong> receipt verified
-            </span>
-          ) : null}
-        </p>
-        <div className="lines-summary-actions">
-          {onScanMore ? (
-            <button type="button" className="button quiet" onClick={onScanMore}>
-              Scan more
+      {rooms.some((room) => room.items.length > 0) ? (
+        <div className="line-toolbar">
+          <div className="line-filter" role="group" aria-label="Which lines to show">
+            <button type="button" aria-pressed={lineFilter === "all"} onClick={() => setLineFilter("all")}>
+              All
             </button>
-          ) : null}
-          <a className="button quiet" href={`/connections?inventory=${encodeURIComponent(inventoryId)}`}>
+            <button type="button" aria-pressed={lineFilter === "attention"} onClick={() => setLineFilter("attention")}>
+              Needs a receipt{totals.attention > 0 ? ` · ${totals.attention}` : ""}
+            </button>
+            {totals.hidden > 0 ? (
+              <button type="button" aria-pressed={lineFilter === "hidden"} onClick={() => setLineFilter("hidden")}>
+                Hidden · {totals.hidden}
+              </button>
+            ) : null}
+          </div>
+          <a className="text-button" href={`/connections?inventory=${encodeURIComponent(inventoryId)}`}>
             Find receipts
           </a>
-        </div>
-      </div>
-
-      {top.length > 0 ? (
-        <section className="sheet ask-queue" aria-label="Worth a minute">
-          <p className="total-label">Worth a minute</p>
-          <p className="hint">
-            {requests.length === 1
-              ? "One line could be firmer. The estimate stands if you leave it."
-              : `${requests.length} lines could be firmer. The ones with the most money in doubt are first. Each estimate stands if you leave it.`}
-          </p>
-          <ul className="ask-list">
-            {top.map((request) => {
-              const item = findItem(request.roomId, request.itemId);
-              if (!item) return null;
-              const busy = checkingId === item.id;
-              return (
-                <li key={request.key} className="ask-item">
-                  <p className="ask-prompt">{request.prompt}</p>
-                  <p className="ask-why">
-                    {request.why} · {request.roomTitle}
-                  </p>
-                  <div className="ask-actions">
-                    {request.kind === "label" || request.kind === "receipt" ? (
-                      <label className="button quiet ask-snap">
-                        {busy ? "Checking" : request.kind === "label" ? "Add photo" : "Add receipt"}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          capture="environment"
-                          disabled={busy}
-                          onChange={(event) => {
-                            const file = event.target.files?.[0];
-                            event.target.value = "";
-                            if (file) void checkPicture(request.roomId, item, file, request.kind === "label" ? "label" : "receipt");
-                          }}
-                        />
-                      </label>
-                    ) : null}
-                    {request.kind === "wider" && onFilmFocus ? (
-                      <button type="button" className="button quiet" onClick={() => onFilmFocus(wider.length > 0 ? wider : [item.id])}>
-                        Film it
-                      </button>
-                    ) : null}
-                    <button type="button" className="text-button" onClick={() => onSkip(inventoryId, request.roomId, item.id, request.kind)}>
-                      Leave it
-                    </button>
-                  </div>
-                  {request.kind === "question" ? (
-                    <form
-                      className="ask-answer"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void sendAnswer(request);
-                      }}
-                    >
-                      <input
-                        value={answers[request.key] ?? ""}
-                        maxLength={500}
-                        placeholder="Your answer"
-                        onChange={(event) => setAnswers((current) => ({ ...current, [request.key]: event.target.value }))}
-                      />
-                      <button type="submit" className="button quiet" disabled={busy}>
-                        {busy ? "Checking" : "Send"}
-                      </button>
-                    </form>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ) : null}
-
-      {rooms.some((room) => room.items.length > 0) ? (
-        <div className="line-filter" role="group" aria-label="Which lines to show">
-          <button type="button" aria-pressed={lineFilter === "all"} onClick={() => setLineFilter("all")}>
-            All
-          </button>
-          <button type="button" aria-pressed={lineFilter === "attention"} onClick={() => setLineFilter("attention")}>
-            Needs a receipt{totals.attention > 0 ? ` · ${totals.attention}` : ""}
-          </button>
-          <button type="button" aria-pressed={lineFilter === "hidden"} onClick={() => setLineFilter("hidden")}>
-            Hidden{totals.hidden > 0 ? ` · ${totals.hidden}` : ""}
-          </button>
         </div>
       ) : null}
 
@@ -452,7 +380,6 @@ export function ItemizedRooms({
         <div className="room-blocks">
           {rooms.map((room) => {
             const active = room.items.filter((item) => !item.hidden);
-            const roomTotal = active.reduce((sum, item) => sum + (item.priceUsd ?? 0) * item.count, 0);
             const hiddenCount = room.items.length - active.length;
             const rows = room.items
               .filter((item) => {
@@ -468,8 +395,7 @@ export function ItemizedRooms({
                 <summary className="room-head">
                   <span className="room-title">{room.title}</span>
                   <span className="room-meta">
-                    {active.length} {active.length === 1 ? "line" : "lines"}
-                    {roomTotal > 0 ? ` · ${formatMoney(roomTotal)}` : ""}
+                    {active.length} {active.length === 1 ? "item" : "items"}
                     {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
                   </span>
                   <span className="fold-mark" aria-hidden="true" />
@@ -499,15 +425,13 @@ export function ItemizedRooms({
                 <ul className="line-list">
                   {[...rows.filter((item) => !isDecor(item)), ...rows.filter((item) => isDecor(item))].map((item, index, ordered) => {
                     const decorHeading = isDecor(item) && (index === 0 || !isDecor(ordered[index - 1]!));
-                    const chip = chipFor(item);
                     const mark = accuracyMark(item);
                     const frames = framesFor(item);
                     const source = safeHttp(item.sourceUrl);
                     const lineTotal = item.priceUsd == null ? null : item.priceUsd * item.count;
                     const cashTotal = item.cashValueUsd == null ? null : item.cashValueUsd * item.count;
-                    const identity = [item.brand, item.markings].filter(Boolean).join(" · ");
-                    const likely = item.likelyBrand ? `Likely ${item.likelyBrand.name}` : "";
-                    const sub = identity || likely || item.itemType || item.category || "";
+                    const sub = rowSubtitle(item);
+                    const walkEntry = walk?.entries.find((candidate) => candidate.ids.includes(item.id));
                     const damageClip = item.damage?.clipId ? clipById.get(item.damage.clipId)?.number : undefined;
                     const damageWhere =
                       damageClip != null ? ` · clip ${damageClip}${item.damage?.atSec != null ? ` at ${formatClock(item.damage.atSec * 1000)}` : ""}` : "";
@@ -534,20 +458,19 @@ export function ItemizedRooms({
                                   {initials(item.name)}
                                 </span>
                               )}
-                              <span className="line-thumb-name">{item.name}</span>
                             </span>
                             <span className="line-main">
-                              <span className="line-name">
-                                {item.name}
-                                {item.count > 1 ? <span className="line-count"> × {item.count}</span> : null}
+                              <span className="line-name" title={item.name}>
+                                {shortName(item.name)}
+                                {item.count > 1 ? <span className="line-count"> ×{item.count}</span> : null}
                               </span>
                               <span className="line-sub">
-                                {confidence.percent != null ? (
-                                  <span className={`line-chip ${confidence.assessed ? "is-settled" : "is-open"}`}>{confidence.percent}%</span>
-                                ) : null}
-                                <span className={`line-chip is-${chip.tone}`}>{chip.label}</span>
-                                {item.declared ? <span className="line-sub-text">Declared by you</span> : null}
-                                {item.userNote ? <span className="line-sub-text">{item.userNote.slice(0, 90)}</span> : null}
+                                <span
+                                  className={`line-chip is-${confidenceTone(confidence)}`}
+                                  title={confidence.percent == null ? confidence.label : `${confidence.percent}% · ${confidence.label}`}
+                                >
+                                  {chipText(confidence)}
+                                </span>
                                 {sub ? <span className="line-sub-text">{sub}</span> : null}
                               </span>
                             </span>
@@ -556,11 +479,6 @@ export function ItemizedRooms({
                               {!item.hidden && item.count > 1 && item.priceUsd != null ? <span className="line-each">{formatMoney(item.priceUsd)} each</span> : null}
                             </span>
                             <span className="line-tools">
-                              {attention ? (
-                                <span className="line-attention" title={attention} aria-label={attention}>
-                                  !
-                                </span>
-                              ) : null}
                               <button
                                 type="button"
                                 className={item.hidden ? "line-hide is-restore" : "line-hide"}
@@ -578,7 +496,62 @@ export function ItemizedRooms({
                           </summary>
 
                           <div className="line-body">
-                            <p className="line-story">{lineStory(item)}</p>
+                            <p className="line-fullname">
+                              {item.name}
+                              {item.count > 1 ? ` × ${item.count}` : ""}
+                            </p>
+                            {walkEntry && walkEntry.status !== "seen" ? (
+                              <p className="line-next">{walkLabel(walkEntry, walk?.since ?? null)}</p>
+                            ) : null}
+                            <dl className="line-stats">
+                              <div className="line-stat is-confidence">
+                                <dt>Confidence</dt>
+                                <dd>
+                                  <span className={`line-chip is-${confidenceTone(confidence)}`}>
+                                    {confidence.percent == null ? confidence.label : `${confidence.percent}% · ${confidence.label}`}
+                                  </span>
+                                  <span className="line-stat-note">
+                                    {confidence.tier === "stated"
+                                      ? "Stated, not seen on camera"
+                                      : confidence.assessed
+                                        ? `Counted · ${confidence.bar}% is the bar at this price`
+                                        : `Counts at ${confidence.bar}%`}
+                                  </span>
+                                </dd>
+                              </div>
+                              <div className="line-stat">
+                                <dt>Replacement cost</dt>
+                                <dd>
+                                  {item.priceUsd == null ? "Not priced yet" : formatMoney(item.priceUsd)}
+                                  {item.count > 1 && lineTotal != null ? <span className="line-stat-note">{formatMoney(lineTotal)} for {item.count}</span> : null}
+                                </dd>
+                              </div>
+                              <div className="line-stat">
+                                <dt>Actual cash value</dt>
+                                <dd>
+                                  {item.cashValueUsd == null ? (item.priceUsd == null ? "—" : "Needs the year") : formatMoney(item.cashValueUsd)}
+                                  {item.count > 1 && cashTotal != null ? <span className="line-stat-note">{formatMoney(cashTotal)} for {item.count}</span> : null}
+                                </dd>
+                              </div>
+                              <div className="line-stat">
+                                <dt>Priced from</dt>
+                                <dd>
+                                  {verified ? (
+                                    "Your receipt"
+                                  ) : source ? (
+                                    <a href={source} rel="noreferrer noopener" target="_blank">
+                                      Store page
+                                    </a>
+                                  ) : item.priceUsd != null ? (
+                                    "Not checked yet"
+                                  ) : (
+                                    "—"
+                                  )}
+                                  {item.pricedAt && source && !verified ? <span className="line-stat-note">{formatWhen(item.pricedAt)}</span> : null}
+                                </dd>
+                              </div>
+                            </dl>
+                            {attention ? <p className="line-next">To raise it: {attention}</p> : null}
                             <div className="line-media">
                               {item.photoUrl ? (
                                 <figure>
@@ -609,32 +582,67 @@ export function ItemizedRooms({
                               </label>
                             </div>
 
-                            <dl className="line-values">
-                              <div>
-                                <dt>Replacement cost</dt>
-                                <dd>
-                                  {item.priceUsd == null ? "Not priced yet" : formatMoney(item.priceUsd)}
-                                  {item.count > 1 && lineTotal != null ? <span> · {formatMoney(lineTotal)} for {item.count}</span> : null}
-                                </dd>
-                              </div>
-                              <div>
-                                <dt>Actual cash value</dt>
-                                <dd>
-                                  {item.cashValueUsd == null ? "—" : formatMoney(item.cashValueUsd)}
-                                  {item.count > 1 && cashTotal != null ? <span> · {formatMoney(cashTotal)} for {item.count}</span> : null}
-                                </dd>
-                              </div>
-                              {source && !verified ? (
-                                <div>
-                                  <dt>Verification source</dt>
-                                  <dd>
-                                    <a href={source} rel="noreferrer noopener" target="_blank">
-                                      Priced from this page
-                                    </a>
-                                    {item.pricedAt ? <span> · {formatWhen(item.pricedAt)}</span> : null}
-                                  </dd>
+                            {(() => {
+                              const replay = replayFor(item);
+                              return replay ? <LineReplay {...replay} /> : null;
+                            })()}
+                            {item.identityCheck && item.identityCheck.result !== "single" ? (
+                              <div className={readsDisagree(item) ? "read-twice is-unsure" : "read-twice"}>
+                                <p className="read-twice-title">
+                                  {item.identityCheck.result === "confirmed"
+                                    ? "Read twice by Muse Spark 1.3: both reads agree."
+                                    : item.identityCheck.resolved
+                                      ? "Read twice by Muse Spark 1.3: the reads disagreed, and you chose."
+                                      : "Read twice by Muse Spark 1.3: the two reads disagree. This line stays unsure instead of picking one."}
+                                </p>
+                                <div className="read-twice-reads">
+                                  {item.identityCheck.reads.map((read, index) => (
+                                    <div key={index} className="read-twice-read">
+                                      <span className="read-twice-label">Read {index + 1}</span>
+                                      <strong>{readOneLine(read)}</strong>
+                                      {read?.evidence ? <span>{read.evidence}</span> : null}
+                                    </div>
+                                  ))}
                                 </div>
-                              ) : null}
+                                {item.identityCheck.result === "confirmed" ? (
+                                  <p className="read-twice-note">Two reads that agree back this version on the line. It is a check, not verification; a receipt verifies it.</p>
+                                ) : null}
+                                {readsDisagree(item) && onResolveIdentity ? (
+                                  <div className="film-room-hint-actions">
+                                    <button type="button" className="film-room is-add" onClick={() => onResolveIdentity(item.id, "a")}>
+                                      Use read 1
+                                    </button>
+                                    <button type="button" className="film-room is-add" onClick={() => onResolveIdentity(item.id, "b")}>
+                                      Use read 2
+                                    </button>
+                                    <button type="button" className="film-room" onClick={() => onResolveIdentity(item.id, "neither")}>
+                                      Neither
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            <p className="line-section-title">Update this item</p>
+                            <dl className="line-values">
+                              <div className="line-paid">
+                                <dt>
+                                  <label htmlFor={`year-${item.id}`}>Year bought</label>
+                                </dt>
+                                <dd>
+                                  <input
+                                    key={`${item.id}-${item.ageYears ?? "none"}`}
+                                    id={`year-${item.id}`}
+                                    inputMode="numeric"
+                                    maxLength={4}
+                                    defaultValue={item.ageYears == null ? "" : String(new Date().getFullYear() - Math.round(item.ageYears))}
+                                    placeholder="Sets the cash value"
+                                    onChange={(event) => {
+                                      const text = event.target.value.trim();
+                                      if (text === "" || text.length === 4) setYearBought(room.id, item, text);
+                                    }}
+                                  />
+                                </dd>
+                              </div>
                               <div className="line-paid">
                                 <dt>
                                   <label htmlFor={`paid-${item.id}`}>Amount paid</label>
@@ -699,18 +707,30 @@ export function ItemizedRooms({
                                     onChange={(event) => {
                                       const text = event.target.value.trim().replace(/[$,]/g, "");
                                       if (text === "") {
-                                        onUpdateItem(inventoryId, room.id, item.id, { appraisalUsd: null });
+                                        setAppraisal(room.id, item, null);
                                         return;
                                       }
                                       const amount = Number(text);
                                       if (!Number.isFinite(amount) || amount < 0 || amount > 1_000_000) return;
-                                      onUpdateItem(inventoryId, room.id, item.id, {
-                                        appraisalUsd: amount,
-                                        priceUsd: amount,
-                                        valueBasis: "Appraisal: formal value on file.",
-                                      });
+                                      setAppraisal(room.id, item, amount);
                                     }}
                                   />
+                                  {appraisalDocumented(item) ? (
+                                    <span className="paid-source is-verified">Appraisal attached</span>
+                                  ) : (
+                                    <label className="text-button line-attach-appraisal">
+                                      {item.appraisalUsd != null ? "Attach the appraisal · until then this is a stated price" : "Attach the appraisal"}
+                                      <input
+                                        type="file"
+                                        accept="image/*,application/pdf,.pdf"
+                                        onChange={(event) => {
+                                          const file = event.target.files?.[0];
+                                          event.target.value = "";
+                                          if (file) void attachFile(room.id, item, file, true);
+                                        }}
+                                      />
+                                    </label>
+                                  )}
                                 </dd>
                               </div>
                               {item.condition || item.damage ? (
@@ -730,25 +750,11 @@ export function ItemizedRooms({
                               ) : null}
                             </dl>
 
-                            {item.depreciationNote && item.cashValueUsd !== item.priceUsd ? <p className="line-note">{item.depreciationNote}</p> : null}
-
-                            {!item.identitySettled && item.enteredBy === "scan" ? (
-                              <div className="line-estimate">
-                                <p>
-                                  {item.skipped.includes("label")
-                                    ? "This replacement estimate was accepted from the walkthrough."
-                                    : "Replacement cost is estimated from the walkthrough. A model number is not required to price it."}
-                                  {item.likelyBrand ? ` Likely ${item.likelyBrand.name}, not confirmed: ${item.likelyBrand.clues}.` : ""}
-                                  {item.options.length > 0
-                                    ? ` Could be ${item.options.map((option) => `${option.label} (${formatMoney(option.lowUsd)}–${formatMoney(option.highUsd)})`).join("; ")}.`
-                                    : ""}
-                                </p>
-                                {!item.skipped.includes("label") ? (
-                                  <button type="button" className="button quiet line-action" onClick={() => acceptEstimate(room.id, item)}>
-                                    Use this estimate
-                                  </button>
-                                ) : null}
-                              </div>
+                            {item.options.length > 0 ? (
+                              <p className="line-note">
+                                Could be {item.options.map((option) => `${option.label} (${formatMoney(option.lowUsd)}–${formatMoney(option.highUsd)})`).join("; ")}. A
+                                close photo of the label settles it.
+                              </p>
                             ) : null}
 
                             <label className="field line-description">
@@ -761,14 +767,6 @@ export function ItemizedRooms({
                                 onChange={(event) => onUpdateItem(inventoryId, room.id, item.id, { userNote: event.target.value })}
                               />
                             </label>
-
-                            {item.declared ? (
-                              <p className="hint">Declared by you. This line stays on the report unless you hide it.</p>
-                            ) : (
-                              <button type="button" className="button quiet line-action" onClick={() => onUpdateItem(inventoryId, room.id, item.id, { declared: true })}>
-                                Declare this item
-                              </button>
-                            )}
 
                             {item.files.length > 0 ? (
                               <ul className="line-files">
@@ -824,6 +822,13 @@ export function ItemizedRooms({
                                 disabled={busy}
                                 onText={(text) => void answerFor(room.id, item, text, "transcript")}
                               />
+                              {item.declared ? (
+                                <span className="paid-source">Declared by you</span>
+                              ) : (
+                                <button type="button" className="text-button" onClick={() => onUpdateItem(inventoryId, room.id, item.id, { declared: true })}>
+                                  Declare
+                                </button>
+                              )}
                               {confirmDelete === item.id ? (
                                 <span className="line-confirm">
                                   <button type="button" className="text-button is-danger" onClick={() => onDeleteItem(inventoryId, room.id, item.id)}>
@@ -844,13 +849,15 @@ export function ItemizedRooms({
 
                             <details className="evidence">
                               <summary>
-                                Evidence · {mark.label} · {mark.met} of {mark.total} signals
+                                How this was valued · {mark.met} of {mark.total} evidence signals
                               </summary>
                               <dl>
-                                {mark.next ? (
+                                <dt>Summary</dt>
+                                <dd>{lineStory(item)}</dd>
+                                {item.depreciationNote ? (
                                   <>
-                                    <dt>What would firm it up</dt>
-                                    <dd>{mark.next}</dd>
+                                    <dt>Cash value</dt>
+                                    <dd>{item.depreciationNote}</dd>
                                   </>
                                 ) : null}
                                 {mark.signals.some((signal) => !signal.met) ? (

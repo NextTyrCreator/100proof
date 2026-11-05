@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
-import { receiptVerified } from "../lib/accuracy-mark";
+import { receiptVerified } from "../lib/line-confidence";
 import { formatMoney, inventoryLabel, type HomeInventory } from "../lib/inventory";
 import type { ItemPatch } from "../lib/inventory-merge";
 import { useInventory } from "./InventoryProvider";

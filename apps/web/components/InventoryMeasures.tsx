@@ -14,6 +14,7 @@ const CALL_LABELS: Record<CallMeasures["byCall"][number]["call"], string> = {
   photo: "Evidence checks",
   voice: "Voice notes",
   receipt: "Connected receipts",
+  belongs: "Room reminders",
 };
 
 function seconds(ms: number) {

@@ -33,3 +33,7 @@ A later scan on the same inventory adds to the list. The same grouped line adds 
 ## Update 2026-10-28 — location range
 
 Within one mile, a teal circle with a check sits to the left of the address. The page does not say “Checked.” Farther than one mile, the page asks the person to allow location and keep the device within 1 mile. The download and the shared proof state that range and the time of the reading. They do not include the coordinates. The reading itself stays in the browser and in the sealed hash. Before Begin scan, a back arrow returns to the title, country, and address. On a later scan of the same inventory, that arrow returns to My inventory. A walkthrough session records up to 5 minutes. Every 30 seconds the recorder closes that clip and opens the next, so each file stays small enough to review. Pause closes the open clip and keeps the camera ready. Record continues. Done, the 5-minute limit, or 15 minutes of sitting still ends the session. Clips are reviewed in the order they were filmed and combined into one inventory. The file is encoded at 480p and 12 frames a second so a phone clip is not rejected for size.
+
+## Amended 2026-11-04
+
+Scans now run up to 15 minutes (30 clips). Scan more adds up to 5. See CHANGELOG.

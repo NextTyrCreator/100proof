@@ -2,6 +2,7 @@ import { addressRegionLabel } from "./address-search";
 import { openRequests } from "./evidence-requests";
 import {
   cashValueTotal,
+  cashValueUnknown,
   inventoryLabel,
   locationCheckedAt,
   locationCheckLabel,
@@ -9,15 +10,16 @@ import {
   type HomeInventory,
 } from "./inventory";
 import { accuracyMark } from "./accuracy-mark";
-import { assessedReplacement, lineConfidence } from "./line-confidence";
+import { appraisalDocumented, assessedReplacement, lineConfidence, receiptVerified, statedUsd } from "./line-confidence";
 import { documentMeasures } from "./inventory-measures";
+import { BAND_LABELS, proofLedger } from "./proof-ledger";
 import { STANDARD } from "./standard";
 
 /**
  * The file a claims professional can import. Each line keeps what the camera showed, what the person said,
  * what a receipt shows, what a comparable supports, and what changed, apart from one another.
  */
-function inventoryJson(inventory: HomeInventory) {
+export function inventoryJson(inventory: HomeInventory) {
   const clipNumber = new Map(inventory.clips.map((clip, index) => [clip.id, index + 1]));
   const open = openRequests(inventory.rooms);
   const measures = documentMeasures(inventory);
@@ -78,13 +80,16 @@ function inventoryJson(inventory: HomeInventory) {
             atSeconds: sighting.atSec,
           })),
           said: item.said.map((fact) => ({ text: fact.text, how: fact.heard, clip: fact.clipId ? (clipNumber.get(fact.clipId) ?? null) : null, atSeconds: fact.atSec })),
-          receipt: item.userValueUsd == null ? null : { pricePaidUsdEach: item.userValueUsd },
+          receipt: receiptVerified(item) && item.userValueUsd != null ? { pricePaidUsdEach: item.userValueUsd } : null,
+          statedUsdEach: statedUsd(item),
+          appraisal: item.appraisalUsd == null ? null : { amountUsd: item.appraisalUsd, documentAttached: appraisalDocumented(item) },
           valuation: item.valueBasis ? { basis: item.valueBasis, source: item.sourceUrl, pricedAt: item.pricedAt } : null,
           possibleModels: item.options,
           photo: Boolean(item.photoPath),
         },
         accuracy: (() => {
           const mark = accuracyMark(item);
+          const confidence = lineConfidence(item);
           return {
             tier: mark.tier,
             label: mark.label,
@@ -94,9 +99,12 @@ function inventoryJson(inventory: HomeInventory) {
             missing: mark.signals.filter((signal) => !signal.met).map((signal) => signal.key),
             receiptConfirmed: mark.receiptConfirmed,
             next: mark.next,
-            confidence: lineConfidence(item).percent,
-            confidenceLabel: lineConfidence(item).label,
-            assessed: lineConfidence(item).assessed,
+            confidence: confidence.percent,
+            confidenceLabel: confidence.label,
+            confidenceTier: confidence.tier,
+            heldBy: confidence.caps,
+            countsAt: confidence.bar,
+            assessed: confidence.assessed,
           };
         })(),
         changes: item.changes.map((entry) => ({ at: entry.at, by: entry.source, before: entry.before, after: entry.after })),
@@ -116,9 +124,24 @@ function inventoryJson(inventory: HomeInventory) {
     totals: {
       replacementUsd: replacementTotal(inventory),
       cashValueUsd: cashValueTotal(inventory),
+      cashValueUnknownLines: cashValueUnknown(inventory),
       assessedReplacementUsd: assessedReplacement(inventory.rooms.flatMap((room) => room.items).filter((item) => !item.hidden)),
       withheld: inventory.rooms.reduce((sum, room) => sum + room.items.filter((item) => item.hidden).length, 0),
     },
+    ledger: (() => {
+      const ledger = proofLedger(inventory.rooms);
+      return {
+        note: "Bands describe the evidence on each line. They are not a promise of what a policy pays.",
+        provenUsd: Math.round(ledger.proven * 100) / 100,
+        totalUsd: Math.round(ledger.total * 100) / 100,
+        bands: Object.fromEntries(
+          (Object.keys(ledger.bands) as (keyof typeof ledger.bands)[]).map((band) => [
+            band,
+            { label: BAND_LABELS[band], usd: Math.round(ledger.bands[band].usd * 100) / 100, lines: ledger.bands[band].lines },
+          ]),
+        ),
+      };
+    })(),
     measures,
     audit: {
       standard: STANDARD,

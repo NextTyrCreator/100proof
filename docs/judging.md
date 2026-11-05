@@ -6,10 +6,10 @@ The sentence: 100 Proof notices what it cannot establish, asks for the missing e
 
 | Feature | Impact | Meta tooling | Demo | Tech depth |
 | --- | --- | --- | --- | --- |
-| 5-minute session in 30-second clips, each reviewed by Muse Spark 1.3 while filming continues | x | x | x | x |
+| 15-minute scan in 30-second clips, reviewed by Muse Spark 1.3 while filming continues. Two clips are reviewed at once and applied in order. Scan more adds up to 5 minutes | x | x | x | x |
 | Narration transcribed by Muse Voice Transcribe 1.0 and attached to lines with clip times | | x | x | x |
 | Each line says whether its count and model are settled, and what would settle them | x | x | x | x |
-| Ranked evidence requests: dollars in doubt over effort, three at a time, asked live during filming | x | | x | x |
+| Ranked evidence requests: dollars in doubt over effort, three at a time, asked when paused | x | | x | x |
 | Label, receipt, picture, or typed answer settles one line; a focused clip settles a count | x | x | x | |
 | Item record with sources kept apart and a change log | x | | x | x |
 | "Still open" queue and exceptions in a versioned JSON claim file; CSV with sources | x | | x | x |
@@ -23,23 +23,15 @@ The sentence: 100 Proof notices what it cannot establish, asks for the missing e
 | Testing engine: deterministic harness over the mark, invariants, ranking, and scorer; invariants exported per file | | | x | x |
 | Governance: versioned standard in every file, compliance register, sealed hash and change trail | x | | x | x |
 | Public Information page: the questions people search for, answered with sources; FAQ markup; answer bots allowed | x | | | |
+| Full-screen camera: time left, clip number, a record/pause shutter, Done, a front/back switch, and zoom only when the camera supports it. The inventory name and address are hidden while filming | | | x | x |
+| New-inventory wizard: name, then country, then address, one at a time in the same place, with a Back arrow. The address is verified in place, within 1 mile of the device, and the device coordinates are never saved. Begin scan opens the camera at once | x | | x | x |
+| Room chips, with each tap stored on the clip: Front entrance, Primary bedroom, Hallway, Gym, and More. A tap sets the room from that second, and the next clip starts there. Until a room is tapped, the camera says to tap the room. If the listing sees a different room, the camera asks, and nothing moves unless the person says yes | x | | x | x |
+| Name cleanup: a room prefix and placeholder words are stripped from the line name, on new lines and on saved lines when they open | | | x | x |
+| Hand-walked scorecard (2026-11-03, 40 entries, 60 units, four rooms) and the five-run rule in `docs/SCORECARD.md`. The rate is the average of five scored walks and stays withheld until five scored runs exist. No run has been scored. 95 is a research bar, not a claim | x | | | x |
 
-## Demo, 2 minutes, one room
+## Demo
 
-Filmed in one take on a phone. Any shortcut or recorded fallback is labeled on screen.
-
-| Time | On screen | Said |
-| --- | --- | --- |
-| 0:00 | My inventory, New scan, title and address, Next asks for location, teal check | "Contents claims stall when there is no list. Regulators tell people to film each room. This does that job." |
-| 0:15 | Filming the room, narrating: "the TV is about three years old" | "Each 30-second clip is reviewed by Muse Spark while I keep filming. What I say is transcribed separately and attached to the line." |
-| 0:35 | Live hint: "Step back and film every dining chair in one view." | "It counted two chairs and says it is not sure. It asks for the one thing that would settle it." |
-| 0:50 | One more clip, wide, all four chairs | "That clip was filmed to settle the chairs." |
-| 1:00 | Live hint for the TV label, Snap it, the line changes model and price | "The label settles the model. The price moves because the model did." |
-| 1:15 | Stop. The list, the TV's Evidence panel: camera at 0:12, "you said", exact product with date, the change from the label | "Every fact says where it came from. The camera, what I said, the label, the comparable." |
-| 1:25 | The TV's accuracy mark moves to Strong, then a receipt snap makes it Receipt-confirmed; Measures shows the mark counts | "Without a receipt we push every signal the camera can give. The receipt does the one job left: it confirms this item is yours." |
-| 1:35 | Still open: one line left; Claim file (JSON) download, the exceptions block | "What it could not settle is listed, not guessed. An adjuster sees it first." |
-| 1:45 | View summary → Measures: lines settled, changed by evidence, first clip to last change, model calls | "This is what we measure on every file: how much arrived settled, what the evidence changed, and how long it took." |
-| 1:50 | EVAL.md table | "Guided against unguided on the same video. It does not decide coverage, and it is not 100% accurate. It shows what it knows and what it does not." |
+The current timed script is [`docs/DEMO_SCRIPT.md`](DEMO_SCRIPT.md).
 
 ## What not to say
 

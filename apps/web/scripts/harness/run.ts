@@ -12,15 +12,63 @@ import { cleanTranscript } from "@100proof/meta-client";
 import { accuracyMark, accuracySummary } from "../../lib/accuracy-mark";
 import { scoreRooms, type TruthLine } from "../../lib/eval-score";
 import { labelWorthAsking, openRequests } from "../../lib/evidence-requests";
-import { inventoryCsv, replacementTotal, type HomeInventory, type ItemChange, type RoomItem, type RoomShard } from "../../lib/inventory";
+import { inventoryCsv, proofText, replacementTotal, type HomeInventory, type ItemChange, type RoomItem, type RoomShard } from "../../lib/inventory";
+import { documentMeasures } from "../../lib/inventory-measures";
 import { HOUSE_STUDY, newUserMinutes, scoreHouseWalk } from "../../lib/house-study";
 import { checkLines } from "../../lib/invariants";
-import { applyPatch, mergeRooms } from "../../lib/inventory-merge";
-import { applyPrices, applyReconcile, heldNearPaid, shareKnownPrices } from "../../lib/scan-pipeline";
+import { applyPatch, mergeRooms, moveClipLines } from "../../lib/inventory-merge";
+import { applyPrices, applyReconcile, joinRepeatPair, joinSurePairs, pricedFrom, shareKnownPrices } from "../../lib/scan-pipeline";
 import { ageFromSpeech, asCondition, clearSharedSightings, depreciate, isBlankFact, isNotProperty, modelRecognized, salvageRoomsJson, shapeWalkthrough } from "../../lib/review-shape";
-import { lineConfidence } from "../../lib/line-confidence";
+import {
+  APPRAISAL_BASIS,
+  appraisalDocumented,
+  assessedReplacement,
+  confidenceTone,
+  isModelNumber,
+  lineConfidence,
+  statedConflict,
+  statedUsd,
+} from "../../lib/line-confidence";
+import { chipText, rowSubtitle, shortName } from "../../lib/line-row";
 import { allCorrect, COUNTING_RULES, EXPECTED, expectedUnits, RESEARCH_SERIES, roomTotals, SCORECARD_BASELINE, scoreRun, scoreSeries } from "../../lib/scorecard";
-import { ADD_LIMIT_MS, advanceClock, blankClock, clipsToSend, readyInOrder, SCAN_LIMIT_MS } from "../../lib/scan-session";
+import { ADD_LIMIT_MS, advanceClock, blankClock, CLIP_NUMBER_LIMIT, clipsToSend, readyInOrder, SCAN_LIMIT_MS } from "../../lib/scan-session";
+import {
+  cleanItemName,
+  clipRoomLabel,
+  DEMO_ROOMS,
+  foldRoomTitle,
+  MORE_ROOMS,
+  roomAt,
+  roomChangeHint,
+  roomMarkersSchema,
+  ROOM_NOT_SET,
+  roomQuestionSchema,
+  withMarker,
+  withoutTappedFolds,
+} from "../../lib/scan-rooms";
+import { cleanRoomNames, fromLoaded, toSaveRequest } from "../../lib/inventory-sync";
+import { compareLines, crossPairs, pairKey, repeatPairs, repeatQuestions, repeatQuestionSchema } from "../../lib/repeat-match";
+import { verdictText } from "../../lib/same-object-client";
+import { compareReads, needsReadTwice, readsDisagree, readTwiceSummary, resolveIdentity, withIdentityCheck } from "../../lib/read-twice";
+import { identityCheckSchema } from "../../lib/identity-check";
+import { bandOf, proofLedger } from "../../lib/proof-ledger";
+import { replayCaption, replayWindow } from "../../lib/replay";
+import { compareWalks, walkCounts, walkLabel } from "../../lib/walk-compare";
+import { BELONGS_PROMPT, belongsSchema, notHereKey, withoutNotHere } from "../../lib/belongs";
+import { blankScanStats } from "../../lib/scan-stats";
+import { inventoryJson } from "../../lib/inventory-export";
+import { buildScanMetrics, compareMetrics, scanMetricsSchema, trendMarkdown, trendSummary } from "../../research/scan-metrics";
+import { demoCards, demoCompareMarkdown } from "../../research/demo-compare";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+function listSources(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return listSources(path);
+    return /\.(ts|tsx)$/.test(name) ? [path] : [];
+  });
+}
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -94,7 +142,12 @@ function receiptChange(paid: number): ItemChange {
 
 // Accuracy mark: the no-receipt ceiling, and the receipt's job.
 {
-  const strong = accuracyMark(item({}));
+  const strong = accuracyMark(
+    item({
+      sourceUrl: "https://store.example/tv",
+      changes: [{ id: "label-1", at: "2026-10-29T00:00:00.000Z", source: "label photo", evidenceRef: null, before: {}, after: { markings: "QN65Q80C" } }],
+    }),
+  );
   check("mark: corroborated line is Strong without a receipt", strong.tier === "strong" && strong.met >= 5, `${strong.met}/${strong.total}`);
   const receipt = accuracyMark(item({ userValueUsd: 950, changes: [receiptChange(950)] }));
   check("mark: receipt confirms individuality", receipt.tier === "receipt" && receipt.receiptConfirmed);
@@ -102,8 +155,10 @@ function receiptChange(paid: number): ItemChange {
   check("mark: a typed price paid is not a receipt", typed.tier !== "receipt" && !typed.receiptConfirmed);
   const missed = accuracyMark(item({ changes: [{ ...receiptChange(950), after: {} }] }));
   check("mark: a receipt that did not list the item verifies nothing", missed.tier !== "receipt");
-  const estimate = accuracyMark(item({ identitySettled: false, markings: null, valueBasis: "Comparable: hot tub" }));
-  check("mark: a priced, counted line with an open model reads as estimated", estimate.tier !== "open", estimate.label);
+  const estimate = accuracyMark(item({ identitySettled: false, markings: null, priceUsd: 200, sourceUrl: "https://store.example/kettle", valueBasis: "Comparable: kettle" }));
+  check("mark: under $250, a priced, counted line with an open model is counted", estimate.tier !== "open", estimate.label);
+  const highOpen = accuracyMark(item({ identitySettled: false, markings: null, sourceUrl: "https://store.example/tub", valueBasis: "Comparable: hot tub" }));
+  check("mark: over $250, a brand with no version shown is not counted and asks for a close-up", highOpen.tier === "open" && /close photo/.test(highOpen.next ?? ""), highOpen.label);
   const open = accuracyMark(item({ countSettled: false, sightings: [{ clipId: "clip-1", atSec: 4 }], said: [] }));
   check("mark: unsettled count needs evidence, with a next step", open.tier === "open" && open.next != null);
   const entered = accuracyMark(item({ enteredBy: "you", sightings: [] }));
@@ -248,8 +303,9 @@ function receiptChange(paid: number): ItemChange {
   const worn = depreciate(1000, 5, 10, "good", { severity: "moderate" });
   check("damage: wear then damage set the cash value", worn.cash === 350, `${worn.cash}`);
   const noAge = depreciate(1000, null, 10, "damaged", { severity: "severe" });
-  check("damage: with no age, only the damage is deducted", noAge.cash === 400, `${noAge.cash}`);
-  check("damage: no damage and no age leaves cash at replacement", depreciate(1000, null, 10, "good").cash === 1000);
+  check("cash: with no age, cash value stays unknown and the damage waits for the age", noAge.cash === null && /damage/.test(noAge.note), `${noAge.cash}`);
+  check("cash: no damage and no age is unknown, never replacement", depreciate(1000, null, 10, "good").cash === null);
+  check("cash: a kind with no wear schedule keeps replacement, less damage", depreciate(1000, null, null, "good").cash === 1000 && depreciate(1000, null, null, "damaged", { severity: "minor" }).cash === 900);
 
   const listed = shapeWalkthrough(
     {
@@ -319,15 +375,27 @@ function receiptChange(paid: number): ItemChange {
   check("condition: original packaging with no damage is new", asCondition("unopened original box") === "new" && asCondition("excellent") === "good");
 
   const chipped = shapeWalkthrough(
-    { rooms: [{ title: "Kitchen", items: [{ name: "Mug", category: "dishes", condition: "damaged", damage: "chip on the rim", damageSeverity: "minor", seenReplacementUsd: 12 }] }] },
+    { rooms: [{ title: "Kitchen", items: [{ name: "Mugs", category: "dishes", count: 4, condition: "damaged", damage: "chip on the rim", damageSeverity: "minor", seenReplacementUsd: 12 }] }] },
     [],
     [],
   ).rooms.flatMap((entry) => entry.items)[0];
   check(
     "damage: a grouped line keeps the price and does not invent one damage note",
-    chipped?.grouped === true && chipped.damage == null && chipped.condition === "worn" && chipped.cashValueUsd === 12,
+    chipped?.grouped === true && chipped.damage == null && chipped.condition === "worn" && chipped.priceUsd === 12 && chipped.cashValueUsd == null,
     `${chipped?.condition} ${chipped?.cashValueUsd}`,
   );
+  const lone = shapeWalkthrough(
+    { rooms: [{ title: "Kitchen", items: [{ name: "Mug", category: "dishes", condition: "damaged", damage: "chip on the rim", damageSeverity: "minor", seenReplacementUsd: 12 }] }] },
+    [],
+    [],
+  ).rooms.flatMap((entry) => entry.items)[0];
+  check(
+    "groups: one object is its own row and keeps its damage for the cash value",
+    lone?.grouped === false && lone.damage != null && lone.cashValueUsd == null && /damage/.test(lone.depreciationNote ?? ""),
+    `${lone?.grouped} ${lone?.cashValueUsd}`,
+  );
+  const dated = depreciate(12, 2, 10, lone?.condition ?? null, lone?.damage ?? null);
+  check("groups: once the age is known, that one object's damage lowers its cash value", dated.cash != null && dated.cash < 12 * 0.8, `${dated.cash}`);
 
   const guessed = shapeWalkthrough(
     { rooms: [{ title: "Bedroom", items: [{ name: "Sneakers", category: "shoes", likelyBrand: "Nike", brandClues: "swoosh", identitySettled: true, seenReplacementUsd: 120 }] }] },
@@ -405,18 +473,110 @@ function receiptChange(paid: number): ItemChange {
       plates.some((line) => line.name === "Sterling flatware set" && !line.grouped),
   );
   check("property: a coffee table is still listed", !isNotProperty("Coffee table", "table", "wood") && modelRecognized("Cafe", "30-inch gas range") && !modelRecognized("Samsung", null));
-  const receiptLine = item({ userValueUsd: 900, changes: [{ id: "c", at: "2026-11-01T00:00:00.000Z", source: "receipt photo", evidenceRef: null, before: {}, after: { userValueUsd: 900 } }] });
-  const numberedPhone = item({ brand: "Apple", markings: "iPhone 17 Pro", identitySettled: true, priceUsd: 1199, options: [] });
-  const namedRange = item({ brand: "Cafe", markings: "French-door refrigerator", identitySettled: true, priceUsd: 4000, options: [] });
-  const similar = item({ brand: "Cafe", markings: "gas range", identitySettled: false, priceUsd: 4000, options: [], detail: "Likely model" });
-  const unsure = item({ brand: "Apple", markings: null, identitySettled: false, priceUsd: 800, options: [{ label: "iPhone 17 Pro", lowUsd: 1100, highUsd: 1200 }, { label: "iPhone 16", lowUsd: 800, highUsd: 900 }] });
-  check("confidence: a receipt is 99", lineConfidence(receiptLine).percent === 99 && lineConfidence(receiptLine).assessed);
-  check("confidence: a model number is 95", lineConfidence(numberedPhone).percent === 95);
-  check("confidence: a model name is 90", lineConfidence(namedRange).percent === 90);
-  check("confidence: one similar model is 75", lineConfidence(similar).percent === 75 && lineConfidence(similar).assessed);
-  check("confidence: two versions wait for a receipt", lineConfidence(unsure).percent === 60 && lineConfidence(unsure).needsReceipt && !lineConfidence(unsure).assessed);
-  check("price: a stated price holds an outrageous comparable", heldNearPaid(100, 10000, null).price === 400);
-  check("price: a formal appraisal may sit above the price paid", heldNearPaid(100, 10000, 8000).price === 8000);
+  {
+  // The confidence ladder: one number per line, from the evidence an appraiser weighs.
+  const page = "https://store.example/item";
+  const closeUp = (after: ItemChange["after"]): ItemChange => ({ id: crypto.randomUUID(), at: "2026-11-01T00:00:00.000Z", source: "label photo", evidenceRef: null, before: {}, after });
+  const agreed = (modelA: string | null, modelB: string | null) => ({
+    result: "confirmed" as const,
+    reads: [
+      { kind: "appliance", brand: "Maker", model: modelA, evidence: "" },
+      { kind: "appliance", brand: "Maker", model: modelB, evidence: "" },
+    ],
+    at: "",
+    resolved: null,
+  });
+  const receiptLine = item({ userValueUsd: 900, sourceUrl: page, changes: [{ id: "c", at: "2026-11-01T00:00:00.000Z", source: "receipt photo", evidenceRef: null, before: {}, after: { userValueUsd: 900 } }] });
+  const appraisalFile = { id: crypto.randomUUID(), name: "appraisal.pdf", path: "org/inv/appraisal.pdf", mediaType: "application/pdf", url: null };
+  const appraised = item({ appraisalUsd: 5000, appraisalFileId: appraisalFile.id, files: [appraisalFile], priceUsd: 5000 });
+  const typedAppraisal = item({ appraisalUsd: 5000, priceUsd: 1100, sourceUrl: page });
+  check("confidence: a receipt that names the item is 99", lineConfidence(receiptLine).percent === 99 && lineConfidence(receiptLine).assessed);
+  check(
+    "confidence: an appraisal with its document is 99 and outranks a receipt",
+    lineConfidence(appraised).percent === 99 && lineConfidence({ ...appraised, changes: receiptLine.changes }).tier === "appraised",
+  );
+  check(
+    "confidence: a typed appraisal with no document is a stated price",
+    !appraisalDocumented(typedAppraisal) && statedUsd(typedAppraisal) === 5000 && lineConfidence(typedAppraisal).percent === 50 && lineConfidence(typedAppraisal).label === "Your price disagrees",
+  );
+  const numbered = item({ sourceUrl: page, changes: [closeUp({ markings: "QN65Q80C" })] });
+  check("confidence: a model number read from a label close-up and priced exact is 95", lineConfidence(numbered).percent === 95);
+  check("confidence: a model number both reads agree on is 95", lineConfidence(item({ sourceUrl: page, identityCheck: agreed("QN65Q80C", "QN65Q80C") })).percent === 95);
+  check("confidence: a confirmed model priced as a comparable is 90", lineConfidence({ ...numbered, valueBasis: "Comparable: Samsung 65-inch QLED" }).percent === 90);
+  const namedPhone = item({ brand: "Apple", markings: "iPhone 17 Pro", priceUsd: 1199, sourceUrl: page, valueBasis: "Exact: Apple iPhone 17 Pro", changes: [closeUp({ markings: "iPhone 17 Pro" })] });
+  check("confidence: a model name is 90, not a model number", lineConfidence(namedPhone).percent === 90 && !isModelNumber("iPhone 17 Pro"));
+  check(
+    "confidence: a size, capacity, resolution, or year is not a model number",
+    !isModelNumber("65-inch") && !isModelNumber("12-cup") && !isModelNumber("4K") && !isModelNumber("2019") && !isModelNumber("Likely model CGS700P2MS") &&
+      isModelNumber("CGS700P2MS") && isModelNumber("V435-J01") && isModelNumber("Vitamix 5200"),
+  );
+  check("confidence: a model number the walk read, with no close-up or second read, is not 95", (lineConfidence(item({ sourceUrl: page, priceUsd: 200 })).percent ?? 0) < 90);
+  const guessedHigh = item({ brand: "Cafe", markings: "CGS700P2MS", detail: "Likely model from the description", identitySettled: false, priceUsd: 4000, sourceUrl: page, valueBasis: "Comparable: Cafe gas range" });
+  check(
+    "confidence: over $250, a model guessed by the text-only check is brand only, not counted",
+    lineConfidence(guessedHigh).percent === 65 && !lineConfidence(guessedHigh).assessed && lineConfidence(guessedHigh).needsReceipt,
+  );
+  const readHigh = { ...guessedHigh, identityCheck: agreed(null, null) };
+  check("confidence: two reads that agree raise that line to 85 and count it", lineConfidence(readHigh).percent === 85 && lineConfidence(readHigh).assessed);
+  const smallBrand = item({ brand: "OXO", markings: "Good Grips salad spinner", detail: "Likely model", identitySettled: false, priceUsd: 40, sourceUrl: page, valueBasis: "Comparable: OXO" });
+  check("confidence: under $250, a brand and a matching model is 85", lineConfidence(smallBrand).percent === 85 && lineConfidence(smallBrand).assessed);
+  const lamp = item({ id: "lamp-line", brand: null, markings: null, identitySettled: false, priceUsd: 60, sourceUrl: page, valueBasis: "Comparable: table lamp" });
+  check("confidence: an ordinary item under $250 priced from a page is 75 and counts", lineConfidence(lamp).percent === 75 && lineConfidence(lamp).assessed && lineConfidence(lamp).bar === 75);
+  check("confidence: over $250 with nothing identifying is 40", lineConfidence({ ...lamp, priceUsd: 600 }).percent === 40 && lineConfidence({ ...lamp, priceUsd: 600 }).bar === 85);
+  check("confidence: a brand alone over $250 is 65 and waits for a receipt", lineConfidence({ ...lamp, brand: "West Elm", priceUsd: 600 }).percent === 65 && lineConfidence({ ...lamp, brand: "West Elm", priceUsd: 600 }).needsReceipt);
+  const unchecked = lineConfidence({ ...lamp, sourceUrl: null });
+  check("confidence: a price no page backs is held at 60", unchecked.percent === 60 && unchecked.label === "Price not checked" && !unchecked.assessed);
+  check("confidence: an open count is held at 70", lineConfidence({ ...smallBrand, countSettled: false }).percent === 70);
+  const versions = item({ brand: "Apple", markings: null, identitySettled: false, priceUsd: 800, sourceUrl: page, options: [{ label: "iPhone 17 Pro", lowUsd: 1100, highUsd: 1200 }, { label: "iPhone 16", lowUsd: 800, highUsd: 900 }] });
+  check("confidence: two possible versions are held at 50 and wait for a receipt", lineConfidence(versions).percent === 50 && lineConfidence(versions).needsReceipt);
+  check(
+    "confidence: a line stated and not seen has no percentage",
+    lineConfidence(item({ enteredBy: "you", sourceUrl: page })).percent === null && lineConfidence(item({ detail: "Stated, not seen. Antique telephone.", sourceUrl: page })).tier === "stated",
+  );
+  const paid = { ...lamp, userValueUsd: 50 };
+  check("price: inside half to double the stated price, the comparable is kept", !statedConflict(paid) && lineConfidence(paid).percent === 75);
+  const farOff = { ...paid, priceUsd: 140 };
+  check(
+    "price: outside half to double, the line drops to 50 and asks",
+    statedConflict(farOff) && lineConfidence(farOff).percent === 50 && openRequests(room([farOff])).some((request) => request.kind === "question" && /Which is closer/.test(request.prompt)),
+  );
+  check("price: a documented appraisal is the price; a typed one is not", pricedFrom(appraised, 9000).price === 5000 && pricedFrom(typedAppraisal, 9000).price === 9000);
+  const relabeled = applyPatch(appraised, { priceUsd: 1200, valueBasis: "Exact: something else" });
+  check("price: a later check never overwrites an appraised price", relabeled?.priceUsd === 5000 && relabeled.valueBasis === APPRAISAL_BASIS);
+  // The list row: a name of at most 20 characters, one short badge, and a subtitle that never repeats the name.
+  check("row: a short name is shown whole", shortName("Peloton bike") === "Peloton bike");
+  check(
+    "row: a long name is cut to 20 characters with an ellipsis, and a name of exactly 20 is not cut",
+    shortName("TISSCARE foot and calf massager").length === 20 &&
+      shortName("TISSCARE foot and calf massager").endsWith("…") &&
+      shortName("12345678901234567890") === "12345678901234567890" &&
+      shortName("123456789012345678901").length === 20,
+  );
+  check("row: extra spaces never push a name over 20", shortName("  small   entry    table  ") === "small entry table");
+  check(
+    "row: one badge, the percent or the state with no percent",
+    chipText(lineConfidence(lamp)) === "75%" &&
+      chipText(lineConfidence(receiptLine)) === "Receipt" &&
+      chipText(lineConfidence(appraised)) === "Appraised" &&
+      chipText(lineConfidence(item({ enteredBy: "you", sourceUrl: page }))) === "Stated",
+  );
+  check(
+    "row: the subtitle is the brand and model, a likely brand, or the kind, and never the name again",
+    rowSubtitle({ ...lamp, name: "Peloton bike", brand: "Peloton", markings: "Bike+", itemType: "bike" }) === "Peloton Bike+" &&
+      rowSubtitle({ ...lamp, name: "Mirror", brand: null, markings: null, likelyBrand: { name: "Ethan Allen", clues: "label" }, itemType: "mirror" }) === "Likely Ethan Allen" &&
+      rowSubtitle({ ...lamp, name: "Houseplant", brand: null, markings: null, likelyBrand: null, itemType: "houseplant" }) === "",
+  );
+  check(
+    "one number: the chip, the ledger band, and the assessed total read the same confidence",
+    bandOf(lamp) === "identified" &&
+      bandOf({ ...lamp, priceUsd: 600 }) === "estimated" &&
+      assessedReplacement([lamp, { ...lamp, id: "lamp-2", priceUsd: 600 }]) === 60 &&
+      confidenceTone(lineConfidence(receiptLine)) === "verified" &&
+      confidenceTone(lineConfidence(lamp)) === "settled" &&
+      confidenceTone(lineConfidence(farOff)) === "unsure" &&
+      accuracyMark(lamp).label === "75% · Class comparable",
+  );
+  }
 
   const pricedSofa = item({
     id: "sofa",
@@ -712,7 +872,7 @@ function receiptChange(paid: number): ItemChange {
     "scorecard: room totals match the workbook",
     rooms.get("Front entrance")?.units === 17 && rooms.get("Bedroom 1")?.units === 19 && rooms.get("Hallway")?.units === 16 && rooms.get("Gym")?.units === 8,
   );
-  const base = { duplicateUnits: 0, phantomUnits: 0, improperInclusionUnits: 0, unresolvedUnits: 0, notExposedUnits: 0 };
+  const base = { duplicateUnits: 0, phantomUnits: 0, improperInclusionUnits: 0, unresolvedUnits: 0, notExposedUnits: 0, remindersOn: false };
   const perfect = scoreRun({ ...base, correct: allCorrect(), includedUnits: 60 });
   check("scorecard: 60 correct and no extras is 100% and PASS", perfect.status === "scored" && perfect.matchScore === 100 && perfect.result === "PASS");
   const improper = scoreRun({ ...base, correct: allCorrect(), improperInclusionUnits: 1, includedUnits: 61 });
@@ -755,8 +915,529 @@ function receiptChange(paid: number): ItemChange {
   check("series: a 90 and a 100 do not average into a stable rate", split.status === "recorded" && split.average === 94 && split.variance === 30 && split.result === "below target and inconsistent");
   const held = scoreSeries([perfect, perfect, perfect, perfect, pending]);
   check("series: an unresolved run withholds the rate", held.status === "withheld");
+  const withReminders = scoreRun({ ...base, remindersOn: true, correct: allCorrect(), includedUnits: 60 });
+  check("series: the reminders checkbox is kept with the run", withReminders.status === "scored" && withReminders.remindersOn && perfect.status === "scored" && !perfect.remindersOn);
+  const mixed = scoreSeries([perfect, perfect, perfect, perfect, withReminders]);
+  check("series: five runs must share one reminder setting", mixed.status === "invalid");
+  const allOn = scoreSeries([withReminders, withReminders, withReminders, withReminders, withReminders]);
+  check("series: the series records its reminder setting", allOn.status === "recorded" && allOn.remindersOn && steady.status === "recorded" && !steady.remindersOn);
   const extra = scoreSeries([perfect, perfect, perfect, perfect, perfect, perfect]);
   check("series: a sixth run is a new series, not a replacement", extra.status === "invalid");
+}
+
+{
+  // Test 1A put most lines in "Walkthrough". A tapped room decides where a line goes.
+  const markers = [
+    { atMs: 0, room: "Front entrance" },
+    { atMs: 18_000, room: "Primary bedroom" },
+  ];
+  check("rooms: the four demo starters come first, the rest are under More", DEMO_ROOMS.join("|") === "Front entrance|Primary bedroom|Hallway|Gym" && MORE_ROOMS.length === 7);
+  check("rooms: a line takes the room tapped at its second", roomAt(markers, 5) === "Front entrance" && roomAt(markers, 18) === "Primary bedroom" && roomAt(markers, 29) === "Primary bedroom");
+  check("rooms: before the first tap, the first tapped room", roomAt([{ atMs: 6000, room: "Gym" }], 2) === "Gym" && roomAt([], 2) === null);
+  check("rooms: Walkthrough is not a room", foldRoomTitle("Walkthrough") === ROOM_NOT_SET && foldRoomTitle("walkthrough 2") === ROOM_NOT_SET);
+  check(
+    "rooms: a closet folds into its room",
+    foldRoomTitle("Primary closet") === "Primary bedroom" && foldRoomTitle("Master bedroom closet") === "Primary bedroom" && foldRoomTitle("Hall closet") === "Hallway",
+  );
+  check("rooms: plain names keep their title, clear aliases map to the seed", foldRoomTitle("Entry") === "Front entrance" && foldRoomTitle("Kitchen") === "Kitchen" && foldRoomTitle("Bedroom") === "Bedroom");
+  check("rooms: markers are validated", !roomMarkersSchema.safeParse([{ atMs: -1, room: "Gym" }]).success && roomMarkersSchema.safeParse(markers).success);
+  const placed = shapeWalkthrough(
+    {
+      rooms: [
+        {
+          title: "Walkthrough",
+          items: [
+            { name: "Entry table", category: "furniture", itemType: "console table", count: 1, seenAtSec: 4, seenReplacementUsd: 300 },
+            { name: "Dresser", category: "furniture", itemType: "dresser", count: 1, seenAtSec: 22, seenReplacementUsd: 350 },
+          ],
+        },
+      ],
+    },
+    [],
+    [],
+    "video",
+    markers,
+  );
+  const roomOf = (name: string) => placed.rooms.find((entry) => entry.items.some((line) => line.name === name))?.title;
+  check("rooms: one clip across two rooms lands each line in its tapped room", roomOf("Entry table") === "Front entrance" && roomOf("Dresser") === "Primary bedroom" && !placed.rooms.some((entry) => entry.title === "Walkthrough"));
+  const untapped = shapeWalkthrough({ rooms: [{ title: "Walkthrough", items: [{ name: "Lamp", category: "furniture", itemType: "lamp", count: 1, seenReplacementUsd: 40 }] }] }, [], []);
+  check("rooms: with no tap, an unclear room is Room not set", untapped.rooms[0]?.title === ROOM_NOT_SET);
+
+  // A room change with no tap is asked about, never applied by itself.
+  const bedroomOnly = [{ atMs: 0, room: "Primary bedroom" }];
+  const saidGym = roomChangeHint({ rooms: [{ title: "Primary bedroom", items: [{ seenAtSec: 3 }] }], roomChange: { room: "home gym", atSec: 14 } }, bedroomOnly);
+  check("room hint: the listing's room change is asked about", saidGym?.room === "Gym" && saidGym.atSec === 14);
+  const listedGym = roomChangeHint({ rooms: [{ title: "Primary bedroom", items: [{ seenAtSec: 3 }] }, { title: "Gym", items: [{ seenAtSec: 20 }, { seenAtSec: 25 }] }] }, bedroomOnly);
+  check("room hint: lines listed in another room raise it at their first second", listedGym?.room === "Gym" && listedGym.atSec === 20);
+  check(
+    "room hint: a looser name for the tapped room is not a reason to ask",
+    roomChangeHint({ rooms: [{ title: "Bedroom", items: [{ seenAtSec: 4 }] }, { title: "Walkthrough", items: [{ seenAtSec: 9 }] }] }, bedroomOnly) === null,
+  );
+  check("room hint: no tap, no prompt", roomChangeHint({ rooms: [{ title: "Gym", items: [{ seenAtSec: 4 }] }] }, []) === null);
+  const sightedAt = (id: string, clipId: string, atSec: number) => item({ id, name: id, sightings: [{ clipId, atSec }] });
+  const beforeMove = {
+    rooms: [
+      { id: crypto.randomUUID(), title: "Primary bedroom", items: [sightedAt("Dresser", "c4", 5), sightedAt("Bench", "c4", 20), item({ id: "Rack", name: "Rack", sightings: [{ clipId: "c4", atSec: 22 }, { clipId: "c5", atSec: 3 }] })] },
+    ],
+  };
+  const afterMove = moveClipLines(beforeMove, "c4", 14, "Primary bedroom", "Gym");
+  const titleOf = (name: string) => afterMove.review.rooms.find((entry) => entry.items.some((line) => line.name === name))?.title;
+  check(
+    "room hint: yes moves that clip's later lines only; a line seen in another clip stays",
+    afterMove.moved === 1 && titleOf("Bench") === "Gym" && titleOf("Dresser") === "Primary bedroom" && titleOf("Rack") === "Primary bedroom",
+  );
+
+  // Room-prefixed names from the earlier-clips hint, and placeholder words.
+  check("names: a room prefix is stripped", cleanItemName("Walkthrough: wall mirror") === "Wall mirror" && cleanItemName("Bedroom: queen bed", ["Bedroom"]) === "Queen bed");
+  check("names: a room word inside the name is stripped and the brand stays", cleanItemName("Honeywell Walkthrough: tower fan") === "Honeywell tower fan");
+  check("names: placeholder words are stripped", cleanItemName("Unspecified size not clear clogs") === "Clogs");
+  check("names: a clean name is left alone", cleanItemName("iPhone 15 Pro") === "iPhone 15 Pro" && cleanItemName("Model 3: charger") === "Model 3: charger");
+  const prefixed = shapeWalkthrough(
+    { rooms: [{ title: "Walkthrough", items: [{ name: "Walkthrough: wall mirror", category: "furniture", itemType: "mirror", count: 1, seenReplacementUsd: 120 }] }] },
+    [],
+    [],
+  );
+  check("names: a new listing never keeps a room prefix", prefixed.rooms[0]?.items[0]?.name === "Wall mirror");
+
+  // One clip listing one object under two rooms, both placed in the tapped room.
+  const twice = shapeWalkthrough(
+    {
+      rooms: [
+        { title: "Walkthrough", items: [{ name: "Tower fan", category: "appliance", itemType: "tower fan", brand: "Honeywell", count: 1, seenAtSec: 6, seenReplacementUsd: 60 }] },
+        { title: "Bedroom", items: [{ name: "Tower fan", category: "appliance", itemType: "tower fan", brand: "Honeywell", count: 1, seenAtSec: 12, seenReplacementUsd: 60 }] },
+      ],
+    },
+    [],
+    [],
+    "video",
+    bedroomOnly,
+  );
+  const fans = twice.rooms.flatMap((entry) => entry.items).filter((line) => /tower fan/i.test(line.name));
+  check("rooms: the same object under two rooms in one clip is one line, not a count of two", fans.length === 1 && fans[0]?.count === 1);
+  const pair = shapeWalkthrough(
+    { rooms: [{ title: "Gym", items: [{ name: "Dumbbell", category: "other", itemType: "dumbbell", count: 1, seenAtSec: 2 }, { name: "Dumbbell", category: "other", itemType: "dumbbell", count: 1, seenAtSec: 4 }] }] },
+    [],
+    [],
+  );
+  check("rooms: two listings in the same room still add up", pair.rooms[0]?.items.reduce((sum, line) => sum + line.count, 0) === 2);
+
+  check("clips: a clip is labeled by the rooms tapped in it", clipRoomLabel([{ atMs: 9000, room: "Gym" }, { atMs: 0, room: "Hallway" }, { atMs: 12_000, room: "Gym" }]) === "Hallway, Gym" && clipRoomLabel(undefined) === "");
+
+  check("reliability: clip 30 of a 15-minute scan is never read as clip 1", CLIP_NUMBER_LIMIT >= SCAN_LIMIT_MS / 30_000 + ADD_LIMIT_MS / 30_000);
+
+  // Nothing the person tapped or answered is lost between the camera, Done, and the save.
+  const folds = withoutTappedFolds({ rooms: [{ from: "Hallway", to: "Front entrance" }, { from: "Room not set", to: "Gym" }] }, ["Hallway", "Gym"]);
+  check("reliability: the repeat check never folds a tapped room away", folds.rooms.length === 1 && folds.rooms[0]?.from === "Room not set");
+  check("reliability: a yes adds the room to that clip's taps", withMarker([{ atMs: 0, room: "Primary bedroom" }], 14_000, "Gym").map((marker) => marker.room).join(",") === "Primary bedroom,Gym");
+
+  const lineA = item({ id: crypto.randomUUID(), name: "Sofa", sightings: [{ clipId: "c1", atSec: 3 }] });
+  const lineB = item({ id: crypto.randomUUID(), name: "Lamp", sightings: [{ clipId: "c1", atSec: 9 }] });
+  const saved = [{ id: crypto.randomUUID(), title: "Living room", items: [item({ id: crypto.randomUUID(), name: "Rug" })] }];
+  const scanMore = [{ id: crypto.randomUUID(), title: "Living room", items: [lineA, lineB] }];
+  const appended = mergeRooms(saved, scanMore, "append");
+  const edited = appended.map((entry) => ({
+    ...entry,
+    items: entry.items.filter((line) => line.id !== lineB.id).map((line) => (line.id === lineA.id ? { ...line, hidden: true } : line)),
+  }));
+  const stamped = [{ ...scanMore[0]!, items: [{ ...lineA, photoPath: "a/b/sofa.jpg", photoUrl: "blob:sofa" }, lineB] }];
+  const refreshed = mergeRooms(edited, stamped, "refresh").flatMap((entry) => entry.items);
+  check("reliability: the second save after stills adds no duplicate lines", refreshed.length === 2 && refreshed.filter((line) => line.id === lineA.id).length === 1);
+  check("reliability: a line deleted while the scan finished stays deleted", !refreshed.some((line) => line.id === lineB.id));
+  check("reliability: a line hidden while the scan finished stays hidden and gets its still", refreshed.find((line) => line.id === lineA.id)?.hidden === true && refreshed.find((line) => line.id === lineA.id)?.photoPath === "a/b/sofa.jpg");
+
+  const clipId = crypto.randomUUID();
+  const question = { id: crypto.randomUUID(), clipId, clip: 4, atSec: 14, room: "Gym", tapped: "Primary bedroom" };
+  check("reliability: a waiting room question is validated", roomQuestionSchema.safeParse(question).success && !roomQuestionSchema.safeParse({ ...question, room: "" }).success);
+  const roundTrip: HomeInventory = {
+    id: crypto.randomUUID(),
+    number: 1,
+    title: "Test",
+    homeAddress: "1 Main",
+    addressRegion: "us",
+    addressPoint: null,
+    place: null,
+    locationCheck: null,
+    savedVersion: 0,
+    loaded: true,
+    createdAt: new Date().toISOString(),
+    coverUrl: "",
+    recordHash: null,
+    sealedAt: null,
+    rooms: [],
+    clips: [
+      {
+        id: clipId,
+        startedAt: new Date().toISOString(),
+        durationMs: 30_000,
+        posterUrl: "",
+        videoUrl: "",
+        mediaType: "video/mp4",
+        sourceKept: true,
+        contentHash: "a".repeat(64),
+        storagePath: null,
+        posterPath: null,
+        spoken: [],
+        rooms: [{ atMs: 0, room: "Primary bedroom" }],
+      },
+    ],
+    items: [],
+    roomQuestions: [question],
+  };
+  const request = toSaveRequest(roundTrip, []);
+  const reloaded = request
+    ? fromLoaded({
+        id: roundTrip.id,
+        title: request.title,
+        region: request.region,
+        address: request.address,
+        version: 1,
+        recordHash: null,
+        sealedAt: null,
+        createdAt: roundTrip.createdAt,
+        document: { ...request.document, clips: request.document.clips.map((clip) => ({ ...clip, videoUrl: "", posterUrl: "" })) },
+      })
+    : null;
+  check(
+    "reliability: room taps and a waiting question survive save and reload",
+    reloaded?.clips[0]?.rooms?.[0]?.room === "Primary bedroom" && reloaded.roomQuestions?.[0]?.room === "Gym",
+  );
+
+  // A line saved before the cleanup opens with the same name a new line would get.
+  const oldLines = [
+    item({ id: crypto.randomUUID(), name: "Walkthrough: wall mirror", itemType: "Walkthrough: wall mirror" }),
+    item({ id: crypto.randomUUID(), name: "Honeywell Walkthrough: tower fan", itemType: "tower fan" }),
+    item({ id: crypto.randomUUID(), name: "Bedroom: queen bed", itemType: "bed" }),
+    item({ id: crypto.randomUUID(), name: "Unspecified size not clear clogs", itemType: "clogs" }),
+    item({ id: crypto.randomUUID(), name: "iPhone 15 Pro", itemType: "phone" }),
+  ];
+  const opened = cleanRoomNames([{ id: crypto.randomUUID(), title: "Bedroom", items: oldLines }]);
+  const openedNames = opened[0]?.items.map((line) => line.name).join("|");
+  check(
+    "names: saved lines open without a room or placeholder in the name",
+    openedNames === "Wall mirror|Honeywell tower fan|Queen bed|Clogs|iPhone 15 Pro",
+    openedNames ?? "",
+  );
+  check("names: a saved kind loses its room prefix too", opened[0]?.items[0]?.itemType === "Wall mirror");
+  check("names: opening twice changes nothing more", cleanRoomNames(opened)[0]?.items.map((line) => line.name).join("|") === openedNames);
+  const newLine = shapeWalkthrough(
+    { rooms: [{ title: "Bedroom", items: [{ name: "Bedroom: queen bed", category: "furniture", itemType: "bed", count: 1, seenReplacementUsd: 300 }] }] },
+    [],
+    [],
+  ).rooms[0]?.items[0]?.name;
+  check("names: a saved line and a new line get the same name", newLine === opened[0]?.items[2]?.name);
+}
+
+{
+  // Test 1A listed the console, the TV, and the dresser twice: once under "Walkthrough", once in the bedroom.
+  const seen = (id: string, name: string, clipId: string, patch: Partial<RoomItem> = {}) =>
+    item({
+      id,
+      name,
+      brand: null,
+      markings: null,
+      serial: null,
+      valueBasis: null,
+      identitySettled: false,
+      said: [],
+      color: null,
+      category: "furniture",
+      itemType: name.toLowerCase(),
+      detail: "",
+      sightings: [{ clipId, atSec: 5 }],
+      ...patch,
+    });
+  const consoleA = seen("console-a", "TV console", "c4", { detail: "TV console, white distressed base with dark wood top, open shelves", priceUsd: 514.07 });
+  const consoleB = seen("console-b", "TV stand", "c6", { detail: "white wood TV stand with dark wood top, open shelves", priceUsd: 514.07 });
+  const tvA = seen("tv-a", "Vizio TV", "c4", { brand: "VIZIO", category: "electronics", itemType: "flat-screen tv", detail: "flat-screen TV, black", color: "black" });
+  const tvB = seen("tv-b", "Flat-screen TV", "c6", { category: "electronics", itemType: "flat-screen tv", detail: "flat-screen TV on stand", photoUrl: "blob:tv", photoPath: "o/i/tv.jpg" });
+  const dresserA = seen("dresser-a", "Dresser", "c5", { detail: "tall dark brown wood double-door dresser with barn-style doors", color: "dark brown" });
+  const dresserB = seen("dresser-b", "Wardrobe cabinet", "c7", { detail: "tall dark brown wood two-door wardrobe cabinet with barn-style doors", color: "brown" });
+  const lampA = seen("lamp-a", "Table lamp", "c2", { detail: "small table lamp, white shade" });
+  const lampB = seen("lamp-b", "Table lamp", "c8", { detail: "small table lamp on nightstand" });
+  const rooms1a: RoomShard[] = [
+    { id: crypto.randomUUID(), title: "Walkthrough", items: [consoleA, tvA, dresserA, lampA] },
+    { id: crypto.randomUUID(), title: "Bedroom", items: [consoleB, tvB, dresserB, lampB] },
+  ];
+  const pairs1a = repeatPairs(rooms1a);
+  const pairOf = (id: string) => pairs1a.find((pair) => pair.aId === id || pair.bId === id);
+  check("repeats: the console and the TV stand in two rooms are one object", pairOf("console-a")?.sure === true && [pairOf("console-a")?.aId, pairOf("console-a")?.bId].includes("console-b"));
+  check("repeats: a branded TV and an unbranded TV that match are one object", pairOf("tv-a")?.sure === true);
+  check("repeats: a dresser and a wardrobe cabinet that match are one object", pairOf("dresser-a")?.sure === true);
+  check("repeats: two lamps are asked about, never merged by themselves", pairOf("lamp-a")?.sure === false);
+  check("repeats: two brands are two objects", compareLines(tvA, { ...tvB, brand: "TCL" }) === null);
+  check("repeats: black and white are two objects", compareLines(tvA, { ...tvB, color: "white" }) === null);
+  check("repeats: two models are two objects", compareLines({ ...tvA, markings: "V435" }, { ...tvB, markings: "M50Q7" }) === null);
+  check("repeats: two lines from one clip are two objects", compareLines(consoleA, { ...consoleB, sightings: [{ clipId: "c4", atSec: 20 }] }) === null);
+  const sureIds = pairs1a.filter((pair) => pair.sure).map((pair) => [pair.aId, pair.bId]);
+  const merged1a = applyReconcile({ rooms: rooms1a }, { same: sureIds, rooms: [] }).review;
+  const allLines = merged1a.rooms.flatMap((room) => room.items);
+  const keptTv = allLines.find((line) => line.id === "tv-a" || line.id === "tv-b");
+  check("repeats: after the check, eight lines are five", allLines.length === 5, String(allLines.length));
+  check("repeats: the merged TV keeps the brand and the photo, and says where else it was seen", keptTv?.brand === "VIZIO" && keptTv.photoPath === "o/i/tv.jpg" && /Also seen in (Bedroom|Walkthrough)\./.test(keptTv.detail));
+  const asked = repeatQuestions(merged1a.rooms, repeatPairs(merged1a.rooms));
+  check("repeats: the unsure pair becomes a question with both rooms", asked.length === 1 && asked[0]?.aRoom !== asked[0]?.bRoom && asked[0]?.aName === "Table lamp");
+  const answered = joinRepeatPair(merged1a, "lamp-a", "lamp-b");
+  check("repeats: a yes merges the asked pair", answered.joined && answered.review.rooms.flatMap((room) => room.items).length === 4);
+  const sculptures: RoomShard[] = [
+    { id: crypto.randomUUID(), title: "Hallway", items: [seen("s1", "Gold starburst sculpture", "c3", { category: "art" }), seen("s2", "Gold starburst sculpture 2", "c3", { category: "art" })] },
+    { id: crypto.randomUUID(), title: "Front entrance", items: [seen("s3", "Starburst shelf sculpture", "c1", { category: "art" })] },
+  ];
+  const sculpturePairs = repeatPairs(sculptures);
+  check("repeats: a line is in one question at most, and decor is never merged by itself", sculpturePairs.length === 1 && sculpturePairs.every((pair) => !pair.sure));
+  // Scan more: the new walk against what is saved. Saved lines are not paired with each other again.
+  const savedRooms: RoomShard[] = [{ id: crypto.randomUUID(), title: "Primary bedroom", items: [consoleA, lampA, { ...lampB, id: "lamp-saved-2" }] }];
+  const walkedAgain: RoomShard[] = [{ id: crypto.randomUUID(), title: "Primary bedroom", items: [{ ...consoleB, sightings: [{ clipId: "new-1", atSec: 4 }] }] }];
+  const again = crossPairs(savedRooms, walkedAgain);
+  check("repeats: a Scan more line that matches a saved line is paired with it", again.length === 1 && again[0]?.aId === "console-a" && again[0]?.sure === true);
+  check("repeats: two saved lines are never paired again by a Scan more walk", !again.some((pair) => pair.aId.startsWith("lamp") && pair.bId.startsWith("lamp")));
+  const massagers = joinSurePairs(
+    {
+      rooms: [
+        {
+          id: crypto.randomUUID(),
+          title: "Gym",
+          items: [
+            seen("m1", "TISSCARE foot massager", "c9", { brand: "TISSCARE", category: "other", itemType: "foot massager", detail: "black electric foot and leg massager with digital display" }),
+            seen("m2", "Foot massager", "c10", { category: "appliance", itemType: "foot massager", detail: "black electric foot massager with digital display and buttons" }),
+          ],
+        },
+      ],
+    },
+    [{ aId: "m1", bId: "m2" }],
+  );
+  check("repeats: a sure match merges even when one line is filed as other", massagers.joined === 1 && massagers.review.rooms[0]?.items[0]?.brand === "TISSCARE");
+  check("repeats: a pair is the same pair in either order", pairKey("a", "b") === pairKey("b", "a"));
+  check(
+    "repeats: the photo comparison is advice with a typed shape",
+    repeatQuestionSchema.safeParse({ ...asked[0], check: { verdict: "same", reason: "Same carved frame.", cues: ["carved frame"] } }).success &&
+      !repeatQuestionSchema.safeParse({ ...asked[0], check: { verdict: "merge", reason: "", cues: [] } }).success,
+  );
+  check(
+    "repeats: the comparison is worded as advice, never as a decision",
+    /look like the same object/.test(verdictText({ verdict: "same", reason: "", cues: [] }, false)) &&
+      /could not tell/.test(verdictText({ verdict: "unsure", reason: "", cues: [] }, false)) &&
+      /comparing/.test(verdictText(null, true)) &&
+      verdictText(null, false) === "",
+  );
+  check(
+    "repeats: a listing's numbered twins are two objects",
+    compareLines(seen("v1", "Decorative bottle vase", "c2", { category: "other" }), seen("v2", "Decorative bottle vase 2", "c3", { category: "other" })) === null,
+  );
+}
+
+{
+  // Read twice: two independent reads of a line over $250. Agreement confirms; disagreement is shown, not guessed.
+  const read = (kind: string, brand: string | null, model: string | null) => ({ kind, brand, model, evidence: "seen" });
+  check("read twice: two matching reads confirm", compareReads(read("flat-screen TV", "VIZIO", null), read("TV", "Vizio", null)) === "confirmed");
+  check("read twice: two brands are unsure", compareReads(read("TV", "VIZIO", null), read("TV", "TCL", null)) === "unsure");
+  check("read twice: a brand only one read saw is unsure", compareReads(read("TV", "VIZIO", null), read("TV", null, null)) === "unsure");
+  check("read twice: two kinds are unsure", compareReads(read("power rack", "Fitness Gear", null), read("weight bench", "Fitness Gear", null)) === "unsure");
+  check("read twice: a model only one read saw stays open, not a conflict", compareReads(read("TV", "VIZIO", "V435-J01"), read("TV", "VIZIO", null)) === "confirmed");
+  check("read twice: two models are unsure", compareReads(read("TV", "VIZIO", "V435"), read("TV", "VIZIO", "M50Q7")) === "unsure");
+  check("read twice: one failed read is read once, never confirmed", compareReads(read("TV", "VIZIO", null), null) === "single");
+  const tv = item({ id: crypto.randomUUID(), name: "Flat-screen TV", brand: null, markings: null, identitySettled: false, priceUsd: 322, valueBasis: null, said: [] });
+  check("read twice: a line over $250 is read, a $100 line is not", needsReadTwice(tv) && !needsReadTwice({ ...tv, priceUsd: 100 }));
+  const at = new Date().toISOString();
+  const unsure = withIdentityCheck({ ...tv, identitySettled: true }, { result: "unsure", reads: [read("TV", "VIZIO", null), read("TV", "TCL", null)], at, resolved: null });
+  check("read twice: unsure leaves identity open and keeps both reads", !unsure.identitySettled && unsure.identityCheck?.reads.length === 2 && readsDisagree(unsure));
+  check("read twice: an unsure line is never at 90 or 95", (lineConfidence({ ...unsure, brand: "VIZIO", markings: "V435", identitySettled: true }).percent ?? 0) < 90);
+  const confirmed = withIdentityCheck(tv, { result: "confirmed", reads: [read("TV", "VIZIO", null), read("TV", "Vizio", null)], at, resolved: null });
+  check("read twice: agreement fills an empty brand and logs it as the check", confirmed.brand === "VIZIO" && confirmed.changes.some((entry) => entry.source === "check" && entry.after.brand === "VIZIO"));
+  check("read twice: agreement alone never settles the model", !confirmed.identitySettled);
+  const picked = resolveIdentity(unsure, "b");
+  check("read twice: the owner's pick is applied and logged as their edit", picked.brand === "TCL" && !readsDisagree(picked) && picked.changes.some((entry) => entry.source === "your edit"));
+  const summary = readTwiceSummary([{ id: crypto.randomUUID(), title: "Bedroom", items: [confirmed, unsure, { ...tv, id: crypto.randomUUID() }] }]);
+  check("read twice: the list says how many were read, agreed, and unsure", summary.read === 2 && summary.agreed === 1 && summary.unsure === 1);
+  check("read twice: a saved check is validated", identityCheckSchema.safeParse(unsure.identityCheck).success && !identityCheckSchema.safeParse({ ...unsure.identityCheck, reads: [] }).success);
+}
+
+{
+  // Proof ledger: the total split by what backs each line. Each line is in exactly one band.
+  const base = { brand: "VIZIO", markings: "V435", identitySettled: true, countSettled: true, said: [], valueBasis: null, sourceUrl: "https://store.example/tv" };
+  const receiptLine = item({ ...base, id: crypto.randomUUID(), priceUsd: 100, changes: [{ id: crypto.randomUUID(), at: "", source: "receipt photo", evidenceRef: null, before: {}, after: { userValueUsd: 95 } }] });
+  const identifiedLine = item({ ...base, id: crypto.randomUUID(), priceUsd: 200 });
+  const highNoRead = item({ ...base, id: crypto.randomUUID(), priceUsd: 400 });
+  const highRead = item({
+    ...base,
+    id: crypto.randomUUID(),
+    priceUsd: 500,
+    identityCheck: { result: "confirmed", reads: [{ kind: "TV", brand: "VIZIO", model: null, evidence: "" }, { kind: "TV", brand: "VIZIO", model: null, evidence: "" }], at: "", resolved: null },
+  });
+  const statedLine = item({ ...base, id: crypto.randomUUID(), priceUsd: 100, brand: null, identitySettled: false, detail: "Stated, not seen. Antique telephone in the dresser." });
+  const hiddenLine = item({ ...base, id: crypto.randomUUID(), priceUsd: 9999, hidden: true });
+  const ledgerRooms: RoomShard[] = [{ id: crypto.randomUUID(), title: "Bedroom", items: [receiptLine, identifiedLine, highNoRead, highRead, statedLine, hiddenLine] }];
+  const ledger = proofLedger(ledgerRooms);
+  check("ledger: a receipt line is in the receipt band", bandOf(receiptLine) === "receipt");
+  check("ledger: a branded line under $250 at its bar is seen and counted", bandOf(identifiedLine) === "identified");
+  check("ledger: over $250, counted needs two reads that agree", bandOf(highNoRead) === "estimated" && bandOf(highRead) === "identified");
+  check("ledger: the same line with no checked page is not counted", bandOf({ ...identifiedLine, sourceUrl: null }) === "estimated");
+  check("ledger: a line from the owner's words is stated, not seen", bandOf(statedLine) === "stated");
+  check("ledger: the bands add up to the total and leave hidden lines out", ledger.total === 1300 && ledger.bands.receipt.usd + ledger.bands.identified.usd + ledger.bands.estimated.usd + ledger.bands.stated.usd === ledger.total);
+  check("ledger: proven is receipt plus seen and identified", ledger.proven === 800);
+
+  // Tap to replay: about three seconds around the clearest second, inside the clip, captioned.
+  const span = replayWindow(14, 30_000);
+  check("replay: it starts a second before and stays inside the clip", span.startMs === 13_000 && span.endMs === 16_500 && replayWindow(0.2, 7_000).startMs === 0 && replayWindow(29.9, 30_000).endMs === 30_000);
+  const words = [
+    { startMs: 12_000, endMs: 13_500, text: "this is the TV console" },
+    { startMs: 14_000, endMs: 15_800, text: "we have a Vizio TV" },
+    { startMs: 25_000, endMs: 26_000, text: "and the lamp" },
+  ];
+  check("replay: the caption is what was said at that moment", replayCaption(words, 14_500, span) === "we have a Vizio TV");
+  check("replay: words outside the played seconds are never captioned", replayCaption(words, 16_000, span) !== "and the lamp" && replayCaption([words[2]!], 14_000, span) === "");
+
+  // Before and after: a second walk against the saved lines. "Not seen" is never "missing".
+  const savedLine = (id: string, name: string) => item({ id, name, said: [], damage: null });
+  const before: RoomShard[] = [
+    { id: crypto.randomUUID(), title: "Primary bedroom", items: [savedLine("radio", "Marshall radio"), savedLine("tv", "Vizio TV"), savedLine("lamp", "Lamp")] },
+    { id: crypto.randomUUID(), title: "Gym", items: [savedLine("bike", "Peloton")] },
+  ];
+  const after: RoomShard[] = [
+    { id: crypto.randomUUID(), title: "Primary bedroom", items: [savedLine("tv-2", "Vizio TV"), savedLine("new-1", "Hamper")] },
+    { id: crypto.randomUUID(), title: "Hallway", items: [{ ...savedLine("lamp-2", "Lamp"), damage: { note: "cracked base", severity: "moderate", clipId: null, atSec: null } }] },
+  ];
+  const compared = compareWalks(
+    before,
+    after,
+    [
+      { aId: "tv", bId: "tv-2", sure: true },
+      { aId: "lamp", bId: "lamp-2", sure: true },
+    ],
+    ["Primary bedroom", "Hallway"],
+    "2026-11-04T20:14:00.000Z",
+  );
+  const statusOf = (id: string) => compared.entries.find((entry) => entry.ids[0] === id)?.status;
+  check("walk: a removed object in a room that was walked is not seen", statusOf("radio") === "not seen");
+  check("walk: an object seen again is seen", statusOf("tv") === "seen");
+  check("walk: damage seen now and not before is a change, and wins over moved", statusOf("lamp") === "changed");
+  check("walk: a room the walk did not enter is not checked, never not seen", statusOf("bike") === "not checked");
+  check("walk: lines only on the new walk are counted as new", compared.added === 1 && walkCounts(compared).notSeen === 1);
+  const radio = compared.entries.find((entry) => entry.ids[0] === "radio");
+  check("walk: the words say not seen since the last walk, never missing", Boolean(radio) && /^Not seen since /.test(walkLabel(radio!, compared.since)) && !/missing|stolen/i.test(walkLabel(radio!, compared.since)));
+
+  // What-belongs-here: at most three questions, never a completeness claim, and "Not here" is remembered.
+  const asked = belongsSchema.parse({
+    questions: [
+      { thing: "router", question: "Is there a router or streaming box near the TV?", reason: "A TV and console are listed." },
+      { thing: "blankets", question: "Are there blankets in the hall closet?", reason: "" },
+      { thing: "lamp", question: "Is there a lamp by the bed?", reason: "A nightstand is listed." },
+      { thing: "rug", question: "Is there a rug?", reason: "" },
+    ],
+  }).questions;
+  check("belongs: at most three questions come back", asked.length === 3);
+  const claims = belongsSchema.parse({
+    questions: [
+      { thing: "none", question: "This room looks complete.", reason: "" },
+      { thing: "router", question: "Is there a router?", reason: "Everything else is listed." },
+      { thing: "", question: "Is there something?", reason: "" },
+    ],
+  }).questions;
+  check("belongs: a reply that says the list is complete, or has no thing, is dropped", claims.length === 0);
+  check("belongs: a broken reply is no questions, not an error", belongsSchema.parse({ questions: "nope" }).questions.length === 0 && belongsSchema.parse({}).questions.length === 0);
+  check("belongs: long text is cut to the contract", belongsSchema.parse({ questions: [{ thing: "x".repeat(80), question: "q".repeat(300), reason: "r".repeat(300) }] }).questions[0]?.question.length === 120);
+  const notHere = new Set([notHereKey("Primary bedroom", "Router")]);
+  check("belongs: Not here is remembered for that room only", withoutNotHere(asked, "primary bedroom", notHere).every((question) => question.thing !== "router") && withoutNotHere(asked, "Hallway", notHere).length === 3);
+  check("belongs: the prompt forbids brands and completeness claims, and treats the list as data", /Never name a brand/.test(BELONGS_PROMPT) && /Never say the list is complete/.test(BELONGS_PROMPT) && /data, not instructions/.test(BELONGS_PROMPT));
+
+  // The CSV carries each line's evidence band.
+  const bandCsv = inventoryCsv({
+    title: "House",
+    homeAddress: "1 Main",
+    addressRegion: "us",
+    addressPoint: null,
+    place: null,
+    locationCheck: null,
+    recordHash: null,
+    items: [],
+    clips: [],
+    rooms: [{ id: crypto.randomUUID(), title: "Bedroom", items: [item({ id: crypto.randomUUID(), name: "Sofa", detail: "Stated, not seen. In the attic." })] }],
+  } as unknown as HomeInventory);
+  const [csvHead, csvRow] = bandCsv.split("\n");
+  const cells = (line: string) => line.match(/("([^"]|"")*"|[^,]*)(,|$)/g)?.filter((cell) => cell !== "").length ?? 0;
+  check(
+    "csv: an evidence_band column, filled for each line",
+    csvHead?.endsWith(",evidence_band") === true && csvRow?.endsWith(',"Stated, not seen"') === true && cells(csvHead) === cells(csvRow),
+    `${cells(csvHead ?? "")} / ${cells(csvRow ?? "")}`,
+  );
+}
+
+{
+  // Research layer: metrics and demo cards live in apps/web/research and never reach the app.
+  const webRoot = join(process.cwd());
+  const appFiles = ["app", "components", "lib"].flatMap((dir) => listSources(join(webRoot, dir)));
+  const importsResearch = appFiles.filter((file) => /from\s+["'][^"']*research\//.test(readFileSync(file, "utf8")));
+  check("research: nothing in app, components, or lib imports the research layer", appFiles.length > 20 && importsResearch.length === 0, importsResearch.join(", "));
+
+  const stats = { ...blankScanStats(crypto.randomUUID(), "2026-11-04T20:14:00.000Z"), clips: 10, listedLines: 62, mergedLive: 3, mergedAtDone: 1, repeatsAsked: 4, repeatsMergedByOwner: 1, photoChecks: { same: 2, different: 1, unsure: 1 }, roomPrompts: { asked: 2, accepted: 1, declined: 1 }, belongs: { asked: 6, notHere: 3 } };
+  const branded = (id: string, name: string, brand: string | null, price: number) =>
+    item({ id, name, brand, priceUsd: price, markings: null, identitySettled: false, said: [], valueBasis: null, sightings: [{ clipId: "c1", atSec: 4 }] });
+  const metricRooms: RoomShard[] = [
+    { id: crypto.randomUUID(), title: "Primary bedroom", items: [branded(crypto.randomUUID(), "Vizio TV", "VIZIO", 322), branded(crypto.randomUUID(), "Tower fan", "Honeywell", 56), branded(crypto.randomUUID(), "Lamp", null, 30)] },
+  ];
+  const inventoryShape = { rooms: metricRooms, clips: [{ startedAt: "2026-11-04T20:14:00.000Z", durationMs: 30_000 }] } as unknown as Pick<HomeInventory, "rooms" | "clips">;
+  const noScore = buildScanMetrics({ run: 1, build: "abc123", inventory: inventoryShape, stats, score: null });
+  check("metrics: merges over lines listed is the duplicate rate before", noScore.duplicatesMerged === 5 && noScore.duplicateRateBefore === Math.round((5 / 62) * 1000) / 1000);
+  check("metrics: brands are counted against the hand list's brands", noScore.brands.found === 2 && noScore.brands.expected === 10);
+  check("metrics: reminders and room prompts are rates of what was asked", noScore.belongs.notHereRate === 0.5 && noScore.roomPrompts.perClip === 0.2);
+  check("metrics: an unscored run has no score and no after-merge duplicate rate", noScore.score === null && noScore.duplicateRateAfter === null);
+  const scored = buildScanMetrics({ run: 2, build: "def456", inventory: inventoryShape, stats, score: { duplicateUnits: 1, phantomUnits: 0, improperInclusionUnits: 0, unresolvedUnits: 0, notExposedUnits: 0, remindersOn: true, correct: { ...allCorrect(), 30: 0 }, includedUnits: 60 } });
+  check("metrics: a scored run carries the five-run scorecard values and the Reminders setting", scored.score?.matchScore === 96.7 && scored.score.remindersOn && scored.duplicateRateAfter === Math.round((1 / 60) * 1000) / 1000);
+  check("metrics: a record is valid against its own contract", scanMetricsSchema.safeParse(scored).success);
+  const deltas = compareMetrics(noScore, scored);
+  check("metrics: two scans compare side by side with a change", deltas.find((row) => row.key === "matchScore")?.delta === null && deltas.find((row) => row.key === "lines")?.delta === 0);
+  const trend = trendSummary([scored, noScore]);
+  check("metrics: the trend is in run order with an average", trend.find((row) => row.key === "lines")?.values.length === 2 && trend.find((row) => row.key === "matchScore")?.average === 96.7);
+  check("metrics: the summary says these are research measurements, not product claims", /not product claims/.test(trendMarkdown([noScore, scored])));
+  const cards = demoCards(metricRooms, stats);
+  check("demo cards: one per feature beat, the same walk without and with the step", cards.length === 4 && cards[2]?.without.value === "62 lines");
+  check("demo cards: they name no other product and say so", /not a measurement of any other product/.test(demoCompareMarkdown(cards, 1)) && !/competitor|chatgpt|gpt|gemini|claude/i.test(demoCompareMarkdown(cards, 1)));
+
+  const withStats = {
+    id: crypto.randomUUID(),
+    number: 1,
+    title: "Test",
+    homeAddress: "1 Main",
+    addressRegion: "us",
+    addressPoint: null,
+    place: null,
+    locationCheck: null,
+    savedVersion: 1,
+    loaded: true,
+    createdAt: new Date().toISOString(),
+    coverUrl: "",
+    recordHash: null,
+    sealedAt: null,
+    rooms: metricRooms,
+    clips: [],
+    items: [],
+    scanStats: [stats],
+  } as HomeInventory;
+  // Marker values that appear nowhere else, so any leak of the counters shows up in the text.
+  const marked = {
+    ...stats,
+    scanId: "5ca95ca9-5ca9-45ca-95ca-95ca95ca95ca",
+    listedLines: 98_761,
+    mergedLive: 98_762,
+    mergedAtDone: 98_763,
+    repeatsAsked: 98_764,
+    photoChecks: { same: 98_765, different: 98_766, unsure: 98_767 },
+    roomPrompts: { asked: 98_768, accepted: 98_769, declined: 98_770 },
+    belongs: { asked: 98_771, notHere: 98_772 },
+  };
+  const leaked = (text: string) =>
+    /scanStats|listedLines|mergedLive|mergedAtDone|repeatsAsked|photoChecks|roomPrompts|notHere|5ca95ca9-5ca9|9876[1-9]|9877[0-2]/.test(text);
+  const exported = { ...withStats, scanStats: [marked] } as HomeInventory;
+  check("research: scan counters never reach the claim file", !leaked(JSON.stringify(inventoryJson(exported))));
+  check("research: scan counters never reach the CSV", !leaked(inventoryCsv(exported)));
+  check("research: scan counters never reach the proof text that is shared or mailed", !leaked(proofText(exported)));
+  check("research: scan counters never reach the measures in the claim file", !leaked(JSON.stringify(documentMeasures(exported))));
+  const savedDoc = toSaveRequest({ ...exported, rooms: [] }, []);
+  check("research: the counters are kept in the saved document, where only research reads them", savedDoc?.document.scanStats?.[0]?.listedLines === 98_761);
+  const recordKeys = Object.keys(scanMetricsSchema.shape);
+  check(
+    "research: a metrics record holds counts, never an address, a name, or narration",
+    !recordKeys.some((key) => /address|title|name|narration|said|spoken|photo(Url|Path)/i.test(key)),
+  );
 }
 
 console.log(failures === 0 ? "\nHarness: all checks passed." : `\nHarness: ${failures} check(s) failed.`);

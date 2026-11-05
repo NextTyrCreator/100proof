@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { recordCalls, uuidSchema } from "../../../../lib/account";
 import { failureCode, reviewWalkthrough, type ModelCall } from "../../../../lib/review-scan";
+import { CLIP_NUMBER_LIMIT } from "../../../../lib/scan-session";
+import { roomMarkersSchema } from "../../../../lib/scan-rooms";
 import { createServerSupabase } from "../../../../lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -20,7 +22,7 @@ const knownSchema = z.object({
 function countPiece(value: FormDataEntryValue | null, fallback: number) {
   if (typeof value !== "string" || !/^\d+$/.test(value)) return fallback;
   const number = Number(value);
-  if (number < 0 || number > 20) return fallback;
+  if (number < 0 || number > CLIP_NUMBER_LIMIT) return fallback;
   return number;
 }
 
@@ -65,6 +67,7 @@ export async function POST(request: Request) {
 
   const focus = readJson(form.get("focus"), focusSchema, []);
   const known = readJson(form.get("known"), knownSchema, { rooms: [], lines: [] });
+  const rooms = readJson(form.get("rooms"), roomMarkersSchema, []);
   const inventoryText = form.get("inventoryId");
   const inventoryId = uuidSchema.safeParse(inventoryText).success ? (inventoryText as string) : null;
 
@@ -72,9 +75,9 @@ export async function POST(request: Request) {
   const started = Date.now();
   try {
     const bytes = Buffer.from(await video.arrayBuffer());
-    const result = await reviewWalkthrough(data.user.id, bytes, video.type || "", { part, parts }, { audio, focus, known }, calls);
+    const result = await reviewWalkthrough(data.user.id, bytes, video.type || "", { part, parts }, { audio, focus, known, rooms }, calls);
     await recordCalls(supabase, inventoryId, calls);
-    return NextResponse.json({ review: result.review, spoken: result.spoken, salvaged: result.salvaged });
+    return NextResponse.json({ review: result.review, spoken: result.spoken, salvaged: result.salvaged, roomHint: result.roomHint });
   } catch (error) {
     await recordCalls(supabase, inventoryId, calls);
     const code = failureCode(error);

@@ -1,4 +1,5 @@
-import type { EvidenceKind, RoomItem, RoomShard } from "./inventory";
+import { formatMoney, type EvidenceKind, type RoomItem, type RoomShard } from "./inventory";
+import { statedConflict, statedUsd } from "./line-confidence";
 
 /**
  * Ask for the evidence most likely to settle the most money for the least effort.
@@ -8,8 +9,6 @@ const EFFORT: Record<EvidenceKind, number> = { question: 1, label: 2, receipt: 3
 
 /** Below this many dollars in doubt, the line is left as it is. */
 const ASK_OVER_USD = 25;
-
-export const SHOWN_AT_ONCE = 3;
 
 export type EvidenceRequest = {
   key: string;
@@ -60,11 +59,14 @@ function open(item: RoomItem, kind: EvidenceKind) {
   if (kind === "label") return labelWorthAsking(item);
   if (kind === "wider") return !item.countSettled;
   if (kind === "receipt") return item.ask?.kind === "receipt" && item.userValueUsd == null;
-  return item.ask?.kind === "question" && !item.said.some((fact) => fact.heard === "typed");
+  return (item.ask?.kind === "question" || statedConflict(item)) && !item.said.some((fact) => fact.heard === "typed");
 }
 
 function promptFor(item: RoomItem, kind: EvidenceKind) {
   const name = item.name.toLowerCase();
+  if (kind === "question" && statedConflict(item)) {
+    return `You gave ${formatMoney(statedUsd(item) ?? 0)} for the ${name}. The closest comparable is ${formatMoney(item.priceUsd ?? 0)}. Which is closer to what one costs?`;
+  }
   if (kind === "label") return `Add a close photo of the label on the ${name}.`;
   if (kind === "wider") return `Step back and film every ${name} in one view.`;
   if (kind === "receipt") return `Snap the receipt for the ${name}, if you have it.`;
@@ -76,6 +78,7 @@ function whyFor(item: RoomItem, kind: EvidenceKind, doubt: number) {
   if (kind === "label") return `The likely models differ by about ${amount}. The estimate stands if you skip this.`;
   if (kind === "wider") return `Part of the group was out of view, so the count of ${item.count} is not settled.`;
   if (kind === "receipt") return "What was paid would back this line better than a comparable.";
+  if (statedConflict(item)) return "The two are more than double apart, so this line is held at 50% until you answer.";
   return "A short answer would settle this line.";
 }
 
@@ -93,7 +96,9 @@ export function openRequests(rooms: RoomShard[]): EvidenceRequest[] {
               ? countDoubt(item)
               : kind === "receipt"
                 ? unit(item) * 0.25 * item.count
-                : unit(item) * 0.2 * item.count;
+                : statedConflict(item)
+                  ? Math.abs((item.priceUsd ?? 0) - (statedUsd(item) ?? 0)) * item.count
+                  : unit(item) * 0.2 * item.count;
         if (doubt < ASK_OVER_USD) continue;
         requests.push({
           key: `${item.id}:${kind}`,

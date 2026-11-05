@@ -1,5 +1,5 @@
 # packages/ui
 
-Shared components: skeletons, ConsentGate for third-party scripts, cookie banner.
+Brand tokens, the logo, and the brand note. The files are `brand/tokens.css`, `brand/logo.jpg`, `brand/loader-mark.png`, and `BRAND.md` (ADR 0006).
 
-The mark, palette, and motion are locked in `brand/logo.jpg`, `brand/tokens.css`, and `BRAND.md` (ADR 0006).
+Skeletons, ConsentGate, and a cookie banner are planned. They are not in this folder.

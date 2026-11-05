@@ -1,5 +1,11 @@
 import { addressRegionLabel } from "./address-search";
-import { assessedReplacement, lineConfidence } from "./line-confidence";
+import { appraisalDocumented, assessedReplacement, lineConfidence } from "./line-confidence";
+import type { IdentityCheck } from "./identity-check";
+import type { RepeatQuestion } from "./repeat-match";
+import { clipRoomLabel, type RoomQuestion } from "./scan-rooms";
+import { BAND_LABELS, bandOf } from "./proof-ledger";
+import type { WalkCompare } from "./walk-compare";
+import type { ScanStats } from "./scan-stats";
 
 /** Ordinary goods at or above this replacement price are their own row. Under it, they are grouped. */
 export const GROUP_UNDER_USD = 100;
@@ -26,6 +32,8 @@ export type ScanClip = {
   posterPath: string | null;
   /** What Muse Voice Transcribe heard in this clip, with times inside the clip. */
   spoken: SpokenLine[];
+  /** Rooms the person tapped during this clip, with times inside the clip. Older clips have none. */
+  rooms?: { atMs: number; room: string }[];
 };
 
 /** Where an item was seen. */
@@ -138,8 +146,10 @@ export type RoomItem = {
   userNote: string;
   /** What the person says it costs. Kept apart from the replacement estimate. */
   userValueUsd: number | null;
-  /** A formal appraisal or certification. It can set the value above a price they paid. */
+  /** A formal appraisal amount. Without its document attached, it counts as a stated price. */
   appraisalUsd: number | null;
+  /** The attached file that is the appraisal document. One of `files`. */
+  appraisalFileId: string | null;
   /** A value the person states themselves. Shown as self declared, not as the scan's price. */
   selfDeclaredUsd: number | null;
   photoUrl: string | null;
@@ -162,6 +172,8 @@ export type RoomItem = {
   skipped: EvidenceKind[];
   pricedAt: string | null;
   changes: ItemChange[];
+  /** Two independent identity reads for a line that could be over $250. */
+  identityCheck?: IdentityCheck | null;
 };
 
 export type RoomShard = {
@@ -196,6 +208,14 @@ export type HomeInventory = {
   rooms: RoomShard[];
   clips: ScanClip[];
   items: EnteredItem[];
+  /** Room-change questions still waiting for the person. Older inventories have none. */
+  roomQuestions?: RoomQuestion[];
+  /** Two lines that may be one object, not sure enough to merge without asking. */
+  repeatQuestions?: RepeatQuestion[];
+  /** The last Scan more walk compared with the saved lines. */
+  walkCompare?: WalkCompare | null;
+  /** Research counts from each scan of this inventory, newest last. Counts only. */
+  scanStats?: ScanStats[];
 };
 
 const ADDRESS_MATCH_MILES = 1;
@@ -339,6 +359,7 @@ export function userEnteredItem(name: string, count: number, note: string): Room
     userNote: note,
     userValueUsd: null,
     appraisalUsd: null,
+    appraisalFileId: null,
     selfDeclaredUsd: null,
     photoUrl: null,
     photoPath: null,
@@ -362,6 +383,14 @@ export function cashValueTotal(inventory: HomeInventory) {
   return inventory.rooms.reduce(
     (sum, room) =>
       sum + room.items.reduce((roomSum, item) => (lineIsReported(item) ? roomSum + (item.cashValueUsd ?? 0) * item.count : roomSum), 0),
+    0,
+  );
+}
+
+/** Priced lines whose cash value is not set, because their age is not known. */
+export function cashValueUnknown(inventory: HomeInventory) {
+  return inventory.rooms.reduce(
+    (sum, room) => sum + room.items.filter((item) => lineIsReported(item) && item.priceUsd != null && item.cashValueUsd == null).length,
     0,
   );
 }
@@ -429,8 +458,9 @@ export function inventoryCsv(inventory: HomeInventory) {
     "condition",
     "damage",
     "likely_brand",
+    "evidence_band",
   ];
-  const blankTail = ["", "", "", "", "", "", ""];
+  const blankTail = ["", "", "", "", "", "", "", ""];
   const shared = [
     inventoryLabel(inventory),
     addressRegionLabel(inventory.addressRegion),
@@ -512,6 +542,7 @@ export function inventoryCsv(inventory: HomeInventory) {
           item.condition ?? "",
           item.damage ? `${item.damage.severity}: ${item.damage.note}` : "",
           item.likelyBrand ? `${item.likelyBrand.name} (${item.likelyBrand.clues})` : "",
+          BAND_LABELS[bandOf(item)],
         ]
           .map(csvCell)
           .join(","),
@@ -524,7 +555,7 @@ export function inventoryCsv(inventory: HomeInventory) {
       [
         ...shared,
         "recorded-scan",
-        `Walkthrough ${index + 1}`,
+        clipRoomLabel(clip.rooms) ? `Clip ${index + 1} · ${clipRoomLabel(clip.rooms)}` : `Clip ${index + 1}`,
         "Source video kept for verification",
         "",
         "",
@@ -572,7 +603,8 @@ export function proofText(inventory: HomeInventory) {
     locationProofLine(inventory),
     "",
     `Assessed value: ${formatMoney(assessedReplacement(inventory.rooms.flatMap((room) => room.items).filter(lineIsReported)))}.`,
-    "A line at 75% or above is in that total. A model number from the walk is 95%. A model name is 90%. A brand and one similar model is 75%. A receipt is 99% and is the evidence for the price paid. A line under 75% is listed and is not in the assessed value. This file does not decide coverage.",
+    "A line is in that total at 75% or above when it is under $250, and at 85% or above when it is over. A formal appraisal with its document attached is 99%, and its amount is the value. A receipt that names this item is 99%. A model number read from a label or by two agreeing reads is 95% when priced as that exact product. A confirmed model name is 90%. A brand and a matching model is 85%; over $250 that needs two agreeing reads or a close-up. An ordinary item under $250 priced from a store page is 75%. A brand alone over $250 is 65%, and nothing identifying over $250 is 40%. A price no page backs is held at 60%, an open count at 70%, and two conflicting answers at 50%. A line stated and not seen has no percentage. This file does not decide coverage.",
+    `Actual cash value is set only when the age is known. ${cashValueUnknown(inventory)} priced lines have no cash value yet.`,
     "",
   ];
 
@@ -614,7 +646,11 @@ export function proofText(inventory: HomeInventory) {
         }
         if (item.serial) lines.push(`  Serial: ${item.serial}`);
         if (item.selfDeclaredUsd != null) lines.push(`  Self declared value: ${formatMoney(item.selfDeclaredUsd)}`);
-        if (item.appraisalUsd != null) lines.push(`  Formal appraisal: ${formatMoney(item.appraisalUsd)}`);
+        if (item.appraisalUsd != null) {
+          lines.push(
+            `  Formal appraisal: ${formatMoney(item.appraisalUsd)}${appraisalDocumented(item) ? ", document attached" : ", no document attached, so it counts as a stated price"}`,
+          );
+        }
         if (item.highValue) lines.push("  High value");
       }
     }

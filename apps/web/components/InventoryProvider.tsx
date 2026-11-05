@@ -14,7 +14,14 @@ import {
   type ScanClip,
   type ScanPlace,
 } from "../lib/inventory";
-import { applyPatch, mergeRooms, withChange, type ItemPatch, type ReviewMode } from "../lib/inventory-merge";
+import { applyPatch, mergeRooms, moveClipLines, withChange, type ItemPatch, type ReviewMode } from "../lib/inventory-merge";
+import { roomMarkersSchema, roomQuestionSchema, withMarker, type RoomMarker, type RoomQuestion } from "../lib/scan-rooms";
+import { repeatQuestionSchema, sameObjectCheckSchema, type RepeatQuestion, type SameObjectVerdict } from "../lib/repeat-match";
+import { joinRepeatPair } from "../lib/scan-pipeline";
+import { identityCheckSchema, type IdentityCheck } from "../lib/identity-check";
+import { resolveIdentity, withIdentityCheck } from "../lib/read-twice";
+import { walkCompareSchema, type WalkCompare } from "../lib/walk-compare";
+import { scanStatsSchema, type ScanStats } from "../lib/scan-stats";
 import type { ItemEvent } from "../lib/inventory-record";
 import { fromListEntry, fromLoaded, listResponseSchema, savable, toSaveRequest } from "../lib/inventory-sync";
 import { reviewItemSchema, reviewResultSchema, type ReviewResult } from "../lib/review-shape";
@@ -76,10 +83,32 @@ type InventoryContextValue = {
   ) => void;
   skipRequest: (inventoryId: string, roomId: string, itemId: string, kind: EvidenceKind) => void;
   addClip: (clip: Omit<ScanClip, "sourceKept">) => void;
-  updateClip: (inventoryId: string, clipId: string, patch: Partial<Pick<ScanClip, "storagePath" | "posterPath">>) => void;
+  updateClip: (inventoryId: string, clipId: string, patch: Partial<Pick<ScanClip, "storagePath" | "posterPath" | "rooms">>) => void;
+  /** Room-change questions the scan saved without an answer. Repeats for the same clip are ignored. */
+  addRoomQuestions: (inventoryId: string, questions: RoomQuestion[]) => void;
+  /** Yes moves that clip's later lines to the room; no keeps them. Returns how many lines moved. */
+  answerRoomQuestion: (inventoryId: string, questionId: string, move: boolean) => number;
+  /** Possible repeats the check at Done did not merge. A repeat of the same pair is ignored. */
+  addRepeatQuestions: (inventoryId: string, questions: RepeatQuestion[]) => void;
+  /** Same item merges the two lines into one; two items keeps both. Returns whether they were merged. */
+  answerRepeatQuestion: (inventoryId: string, questionId: string, merge: boolean) => boolean;
+  /** Muse Spark 1.3's photo comparison for a waiting question. Advice only. */
+  setRepeatCheck: (inventoryId: string, questionId: string, check: SameObjectVerdict) => void;
+  /** A sure repeat found after a save, such as a Scan more line that matches a saved one. */
+  joinLines: (inventoryId: string, aId: string, bId: string) => void;
+  /** Two identity reads that came back after the scan was saved. */
+  setIdentityCheck: (inventoryId: string, itemId: string, check: IdentityCheck) => void;
+  /** The owner's pick on a line whose two reads disagree. */
+  resolveIdentityCheck: (inventoryId: string, itemId: string, pick: "a" | "b" | "neither") => void;
+  /** A Scan more walk compared with the saved lines. The latest one replaces the last. */
+  setWalkCompare: (inventoryId: string, compare: WalkCompare) => void;
+  /** One scan's research counts. A later save of the same scan replaces its earlier counts. */
+  saveScanStats: (inventoryId: string, stats: ScanStats) => void;
   addItem: (item: EnteredItem) => void;
   /** Upload to the private bucket. Returns the storage path, or null when it did not save. */
   saveMedia: (inventoryId: string, name: string, blob: Blob) => Promise<string | null>;
+  /** Pictures already saved for this inventory, with a link that expires in an hour. */
+  listMedia: (inventoryId: string) => Promise<{ path: string; name: string; url: string | null }[]>;
 };
 
 const InventoryContext = createContext<InventoryContextValue | null>(null);
@@ -130,6 +159,8 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
   const pendingEventsRef = useRef(new Map<string, ItemEvent[]>());
   const savingRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
+  const retryAfterSaveRef = useRef(false);
+  const flushRef = useRef<(() => Promise<void>) | null>(null);
   const loadingRef = useRef(new Map<string, Promise<boolean>>());
   const supabaseRef = useRef<ReturnType<typeof createBrowserSupabase> | null>(null);
 
@@ -180,8 +211,13 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
   }, [fetchList]);
 
   const flush = useCallback(async () => {
-    if (savingRef.current) return;
+    if (savingRef.current) {
+      // A change landed while a save was in flight. It is saved once that save returns, not dropped.
+      retryAfterSaveRef.current = true;
+      return;
+    }
     savingRef.current = true;
+    retryAfterSaveRef.current = false;
     try {
       for (const id of [...dirtyRef.current]) {
         const inventory = inventoriesRef.current.find((entry) => entry.id === id);
@@ -238,8 +274,14 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
       }
     } finally {
       savingRef.current = false;
+      if (retryAfterSaveRef.current && dirtyRef.current.size > 0) {
+        retryAfterSaveRef.current = false;
+        if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = window.setTimeout(() => void flushRef.current?.(), 300);
+      }
     }
   }, []);
+  flushRef.current = flush;
 
   useEffect(() => {
     if (dirtyRef.current.size === 0) return;
@@ -461,10 +503,146 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
         }));
       },
       updateClip: (inventoryId, clipId, patch) => {
+        if (patch.rooms && !roomMarkersSchema.safeParse(patch.rooms).success) return;
         update(inventoryId, (inventory) => ({
           ...inventory,
           clips: inventory.clips.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip)),
         }));
+      },
+      addRoomQuestions: (inventoryId, questions) => {
+        const parsed = z.array(roomQuestionSchema).max(40).safeParse(questions);
+        if (!parsed.success || parsed.data.length === 0) return;
+        update(inventoryId, (inventory) => {
+          const waiting = inventory.roomQuestions ?? [];
+          const asked = new Set(waiting.map((question) => question.clipId));
+          return { ...inventory, roomQuestions: [...waiting, ...parsed.data.filter((question) => !asked.has(question.clipId))].slice(-40) };
+        });
+      },
+      answerRoomQuestion: (inventoryId, questionId, move) => {
+        const inventory = inventories.find((entry) => entry.id === inventoryId);
+        const question = inventory?.roomQuestions?.find((entry) => entry.id === questionId);
+        if (!inventory || !question) return 0;
+        const result = move ? moveClipLines({ rooms: inventory.rooms }, question.clipId, question.atSec, question.tapped, question.room) : null;
+        for (const itemId of result?.ids ?? []) {
+          queueEvent(inventoryId, {
+            id: crypto.randomUUID(),
+            itemId,
+            kind: "edit",
+            evidence: { source: "room prompt", clip: question.clip },
+            before: { room: question.tapped.slice(0, 80) },
+            after: { room: question.room.slice(0, 80) },
+          });
+        }
+        update(inventoryId, (current) => {
+          const rest = (current.roomQuestions ?? []).filter((entry) => entry.id !== questionId);
+          if (!move) return { ...current, roomQuestions: rest };
+          const moved = moveClipLines({ rooms: current.rooms }, question.clipId, question.atSec, question.tapped, question.room);
+          const marked = (markers: RoomMarker[] | undefined) => withMarker(markers ?? [], Math.round(question.atSec * 1000), question.room);
+          return {
+            ...current,
+            rooms: moved.review.rooms,
+            clips: current.clips.map((clip) => (clip.id === question.clipId ? { ...clip, rooms: marked(clip.rooms) } : clip)),
+            roomQuestions: rest,
+          };
+        });
+        return result?.moved ?? 0;
+      },
+      addRepeatQuestions: (inventoryId, questions) => {
+        const parsed = z.array(repeatQuestionSchema).max(40).safeParse(questions);
+        if (!parsed.success || parsed.data.length === 0) return;
+        const key = (question: RepeatQuestion) => [question.aId, question.bId].sort().join("|");
+        update(inventoryId, (inventory) => {
+          const waiting = inventory.repeatQuestions ?? [];
+          const asked = new Set(waiting.map(key));
+          return { ...inventory, repeatQuestions: [...waiting, ...parsed.data.filter((question) => !asked.has(key(question)))].slice(-40) };
+        });
+      },
+      answerRepeatQuestion: (inventoryId, questionId, merge) => {
+        const inventory = inventories.find((entry) => entry.id === inventoryId);
+        const question = inventory?.repeatQuestions?.find((entry) => entry.id === questionId);
+        if (!inventory || !question) return false;
+        const result = merge ? joinRepeatPair({ rooms: inventory.rooms }, question.aId, question.bId) : null;
+        const goneId = result?.joined ? (result.keptId === question.aId ? question.bId : question.aId) : null;
+        if (result?.joined && result.keptId && goneId) {
+          queueEvent(inventoryId, {
+            id: crypto.randomUUID(),
+            itemId: result.keptId,
+            kind: "edit",
+            evidence: { source: "repeat question" },
+            before: { sameObjectAs: (goneId === question.aId ? question.aName : question.bName).slice(0, 400) },
+            after: { rooms: `${question.aRoom}, ${question.bRoom}`.slice(0, 400) },
+          });
+        }
+        update(inventoryId, (current) => {
+          const rest = (current.repeatQuestions ?? []).filter(
+            (entry) => entry.id !== questionId && (!goneId || (entry.aId !== goneId && entry.bId !== goneId)),
+          );
+          if (!merge) return { ...current, repeatQuestions: rest };
+          const joined = joinRepeatPair({ rooms: current.rooms }, question.aId, question.bId);
+          return { ...current, rooms: joined.review.rooms, repeatQuestions: rest };
+        });
+        return result?.joined ?? false;
+      },
+      setRepeatCheck: (inventoryId, questionId, check) => {
+        const parsed = sameObjectCheckSchema.safeParse(check);
+        if (!parsed.success) return;
+        update(inventoryId, (inventory) => ({
+          ...inventory,
+          repeatQuestions: (inventory.repeatQuestions ?? []).map((question) => (question.id === questionId ? { ...question, check: parsed.data } : question)),
+        }));
+      },
+      setIdentityCheck: (inventoryId, itemId, check) => {
+        const parsed = identityCheckSchema.safeParse(check);
+        if (!parsed.success) return;
+        update(inventoryId, (inventory) => ({
+          ...inventory,
+          rooms: inventory.rooms.map((room) => ({
+            ...room,
+            items: room.items.map((item) => (item.id === itemId ? withIdentityCheck(item, parsed.data) : item)),
+          })),
+        }));
+      },
+      resolveIdentityCheck: (inventoryId, itemId, pick) => {
+        queueEvent(inventoryId, {
+          id: crypto.randomUUID(),
+          itemId,
+          kind: "edit",
+          evidence: { source: "read twice", pick },
+          before: null,
+          after: null,
+        });
+        update(inventoryId, (inventory) => ({
+          ...inventory,
+          rooms: inventory.rooms.map((room) => ({
+            ...room,
+            items: room.items.map((item) => (item.id === itemId ? resolveIdentity(item, pick) : item)),
+          })),
+        }));
+      },
+      saveScanStats: (inventoryId, stats) => {
+        const parsed = scanStatsSchema.safeParse(stats);
+        if (!parsed.success) return;
+        update(inventoryId, (inventory) => {
+          const others = (inventory.scanStats ?? []).filter((entry) => entry.scanId !== parsed.data.scanId);
+          return { ...inventory, scanStats: [...others, parsed.data].slice(-20) };
+        });
+      },
+      setWalkCompare: (inventoryId, compare) => {
+        const parsed = walkCompareSchema.safeParse(compare);
+        if (!parsed.success) return;
+        update(inventoryId, (inventory) => ({ ...inventory, walkCompare: parsed.data }));
+      },
+      joinLines: (inventoryId, aId, bId) => {
+        update(inventoryId, (inventory) => {
+          const joined = joinRepeatPair({ rooms: inventory.rooms }, aId, bId);
+          if (!joined.joined) return inventory;
+          const gone = joined.keptId === aId ? bId : aId;
+          return {
+            ...inventory,
+            rooms: joined.review.rooms,
+            repeatQuestions: (inventory.repeatQuestions ?? []).filter((question) => question.aId !== gone && question.bId !== gone),
+          };
+        });
       },
       addItem: (item) => {
         const id = selectedIdRef.current;
@@ -485,6 +663,25 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
           return error ? null : path;
         } catch {
           return null;
+        }
+      },
+      listMedia: async (inventoryId) => {
+        if (!orgIdRef.current) await fetchList();
+        const orgId = orgIdRef.current;
+        if (!orgId) return [];
+        try {
+          supabaseRef.current ??= createBrowserSupabase();
+          const bucket = supabaseRef.current.storage.from("evidence");
+          const folder = `${orgId}/${inventoryId}`;
+          const { data, error } = await bucket.list(folder, { limit: 1000 });
+          if (error || !data) return [];
+          const names = data.map((entry) => entry.name).filter((name) => /\.(jpe?g|png)$/i.test(name));
+          if (names.length === 0) return [];
+          const paths = names.map((name) => `${folder}/${name}`);
+          const { data: signed } = await bucket.createSignedUrls(paths, 3600);
+          return names.map((name, index) => ({ name, path: paths[index]!, url: signed?.[index]?.signedUrl ?? null }));
+        } catch {
+          return [];
         }
       },
     };

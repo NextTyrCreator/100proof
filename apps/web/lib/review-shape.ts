@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { identityCheckSchema } from "./identity-check";
+import { cleanItemName, placeRoom, type RoomMarker } from "./scan-rooms";
 import {
   GROUP_UNDER_USD,
   HIGH_VALUE_OVER_USD,
@@ -211,6 +213,7 @@ export const reviewItemSchema = z.object({
   userNote: z.string().max(500),
   userValueUsd: z.number().finite().nonnegative().max(1_000_000).nullable(),
   appraisalUsd: z.number().finite().nonnegative().max(1_000_000).nullable().default(null),
+  appraisalFileId: z.string().uuid().nullable().catch(null).default(null),
   selfDeclaredUsd: z.number().finite().nonnegative().max(1_000_000).nullable().default(null),
   photoUrl: z.string().max(2_000).nullable(),
   photoPath: z.string().max(300).nullable(),
@@ -238,6 +241,8 @@ export const reviewItemSchema = z.object({
   skipped: z.array(evidenceKindSchema).max(4),
   pricedAt: z.string().max(40).nullable(),
   changes: z.array(itemChangeSchema).max(40),
+  /** Read twice, for lines that could be over $250. Older lines have none. */
+  identityCheck: identityCheckSchema.nullable().optional(),
 });
 
 export const reviewResultSchema = z.object({
@@ -500,6 +505,8 @@ const DAMAGE_LEFT: Record<DamageSeverity, number> = { minor: 0.9, moderate: 0.7,
 /**
  * Cash value is replacement less physical depreciation: age against useful life, adjusted for condition,
  * then any damage the camera showed. Replacement itself is never reduced, because it is the price of a new one.
+ * With no age, cash value stays unknown instead of matching replacement. A kind that does not wear out on a
+ * schedule (jewelry, art, collectibles) keeps replacement, less any damage.
  */
 export function depreciate(
   replacement: number,
@@ -507,19 +514,19 @@ export function depreciate(
   usefulLifeYears: number | null,
   condition: string | null,
   damage: Pick<Damage, "severity"> | null = null,
-) {
+): { cash: number | null; note: string } {
   const left = damage ? DAMAGE_LEFT[damage.severity] : 1;
   const damageText = damage ? ` ${damage.severity[0]?.toUpperCase()}${damage.severity.slice(1)} damage on camera takes off ${Math.round((1 - left) * 100)}%.` : "";
-  if (ageYears == null || usefulLifeYears == null || usefulLifeYears <= 0) {
-    if (!damage) {
-      return {
-        cash: replacement,
-        note: "No age was clear, so depreciation was not taken. The cash value matches replacement.",
-      };
-    }
+  if (usefulLifeYears == null || usefulLifeYears <= 0) {
     return {
       cash: Math.round(replacement * left * 100) / 100,
-      note: `Adjuster estimate. No age was clear, so only damage is deducted.${damageText} Cash value is ${Math.round(left * 100)}% of replacement. Replacement stays the price of a new one.`.slice(0, 300),
+      note: `This kind does not wear out on a schedule, so no age is deducted.${damageText} A carrier can use another schedule.`.slice(0, 300),
+    };
+  }
+  if (ageYears == null) {
+    return {
+      cash: null,
+      note: `Age not known, so the cash value is not set. Add the year bought or a photo of the label to set it.${damage ? ` The ${damage.severity} damage seen on camera will be deducted then.` : ""}`.slice(0, 300),
     };
   }
   let life = usefulLifeYears;
@@ -563,10 +570,13 @@ export function isDecor(parts: { name: string; itemType?: string | null; detail?
  * Sterling silverware is not bulk: it stays on its own row by value.
  */
 function isBulkKind(parts: { name: string; itemType?: string | null; category?: string | null }) {
-  const category = normLabel(parts.category ?? "");
-  if (category === "dishes" || category === "utensils" || category === "linens") return true;
   const text = `${parts.name} ${parts.itemType ?? ""}`.toLowerCase();
   if (/\b(sterling|silver)\b/.test(text)) return false;
+  // Weight plates, a barbell, a decorative dish, a cutting board, or a bed's comforter are not a kitchen set.
+  if (/\b(weights?|bumper|olympic|barbells?|dumbbells?|kettlebells?|gym|fitness|exercise)\b/.test(text)) return false;
+  if (/\b(decorative|trinket|candy|accent|ornamental|serving|platter|cutting|chopping|comforter|duvet|quilt|blanket|throw|pillows?)\b/.test(text) && !/\bpillowcases?\b/.test(text)) return false;
+  const category = normLabel(parts.category ?? "");
+  if (category === "dishes" || category === "utensils" || category === "linens") return true;
   return /\b(plates?|bowls?|dinnerware|dishes|dish set|glassware|wine glasses|drinking glasses|tumblers?|mugs?|cups?|flatware|cutlery|utensils?|cookware|pots and pans|bakeware|towels?|washcloths?|sheets?|pillowcases?)\b/.test(text);
 }
 
@@ -590,6 +600,8 @@ export function modelRecognized(brand: string | null, markings: string | null) {
 export function isNotProperty(name: string, kind: string, detail: string) {
   const text = `${name} ${kind} ${detail}`.toLowerCase();
   if (/\b(storage|moving|plastic|file|bin|tote|crate)\b/.test(text) && /\b(box|bin|tote|crate)\b/.test(text)) return false;
+  // The can or bin is property. What is in it is not.
+  if (/\b(trash|garbage|rubbish|recycling|waste)\s+(cans?|bins?|baskets?|receptacles?)\b|\bwastebaskets?\b/.test(text)) return false;
   if (/\b(trash|garbage|rubbish|scrap paper|notepad|sticky notes?|loose papers?)\b/.test(text)) return true;
   if (/\b(pencil|pen|marker)\b/.test(text) && !/\b(sharpener|case|set|holder|cup)\b/.test(text)) return true;
   if (/\b(drink|coffee|tea|soda|water)\b/.test(text) && /\b(mug|cup|glass)\b/.test(text) && !/\b(set|maker|machine|table|press)\b/.test(text)) return true;
@@ -599,17 +611,11 @@ export function isNotProperty(name: string, kind: string, detail: string) {
 }
 
 function groupTitle(draft: Draft) {
-  const who =
-    draft.wearer === "women" ? "Women's" : draft.wearer === "men" ? "Men's" : draft.wearer === "kids" ? "Kids'" : draft.wearer === "unknown" ? "Unspecified" : "";
-  const size =
-    draft.wearer === "kids" || draft.sizeBand == null
-      ? ""
-      : draft.sizeBand === "kids"
-        ? "kids"
-        : draft.sizeBand === "adults"
-          ? "adult"
-          : "size not clear";
-  return [who, size, draft.brand, draft.itemType || draft.name].filter(Boolean).join(" ").slice(0, 120);
+  // Only what is known goes in the name. "Unspecified size not clear clogs" is just "Clogs".
+  const who = draft.wearer === "women" ? "Women's" : draft.wearer === "men" ? "Men's" : draft.wearer === "kids" ? "Kids'" : "";
+  const size = draft.wearer === "kids" ? "" : draft.sizeBand === "kids" ? "kids" : draft.sizeBand === "adults" ? "adult" : "";
+  const title = [who, size, draft.brand, draft.itemType || draft.name].filter(Boolean).join(" ").slice(0, 120);
+  return title.charAt(0).toUpperCase() + title.slice(1);
 }
 
 function rowName(draft: Draft, grouped: boolean) {
@@ -640,8 +646,8 @@ function blankItem(
     name: rowName(draft, grouped),
     detail: (grouped
       ? isBulkKind(draft)
-        ? `Bulk line. About ${draft.count} ${[draft.brand, draft.itemType || draft.name].filter(Boolean).join(" ")} counted as one set; the count is an estimate from the walk. Priced per piece.${draft.description ? ` ${draft.description}` : ""}`
-        : `Counted together for the carrier. ${draft.count} ${[draft.brand, draft.itemType || draft.category].filter(Boolean).join(" ")} pieces, each under $${GROUP_UNDER_USD} to replace.${draft.markings ? ` Mark: ${draft.markings}.` : ""}`
+        ? `About ${draft.count} ${[draft.brand, draft.itemType || draft.name].filter(Boolean).join(" ")}, counted as one set. The count is an estimate from the walk; priced per piece.${draft.description ? ` ${draft.description}` : ""}`
+        : `${draft.count} ${[draft.brand, draft.itemType || draft.name].filter(Boolean).join(" ")} counted together, each under $${GROUP_UNDER_USD} to replace.${draft.description ? ` ${draft.description}` : ""}${draft.markings ? ` Mark: ${draft.markings}.` : ""}`
       : draft.description
     ).slice(0, 400),
     count: draft.count,
@@ -671,6 +677,7 @@ function blankItem(
     userNote: "",
     userValueUsd: draft.pricePaidUsd,
     appraisalUsd: null,
+    appraisalFileId: null,
     selfDeclaredUsd: null,
     photoUrl: null,
     photoPath: null,
@@ -746,22 +753,32 @@ export function clearSharedSightings<T extends { roomTitle: string; seenAt: numb
 }
 
 /** Turn a model list into itemized rows and category groups under $100. */
-export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptLine[], heard: Heard = "video"): ReviewResult {
+export function shapeWalkthrough(
+  raw: unknown,
+  priced: PricedLine[],
+  kept: KeptLine[],
+  heard: Heard = "video",
+  markers: RoomMarker[] = [],
+): ReviewResult {
   const pricedAt = new Date().toISOString();
   const parsed = rawReviewSchema.safeParse(raw);
   if (!parsed.success) throw new Error("The review did not come back as a list.");
 
   const drafts: Draft[] = [];
+  /** The room the listing put each draft in, before a tapped room moved it. */
+  const listedRoom = new Map<Draft, string>();
+  const roomTitles = [...parsed.data.rooms.map((room) => room.title), ...markers.map((marker) => marker.room)];
   for (const room of parsed.data.rooms) {
     for (const item of room.items) {
       const category = normLabel(item.category) || "other";
+      const name = cleanItemName(item.name, roomTitles);
       const draft: Draft = {
         key: "",
-        name: item.name.trim(),
+        name,
         description: item.description.trim(),
         count: item.count,
         category,
-        itemType: item.itemType.trim() || item.name.trim(),
+        itemType: cleanItemName(item.itemType, roomTitles) || name,
         brand: knownMark(item.brand),
         markings: knownMark(item.markings),
         wearer: asWearer(item.wearer, category),
@@ -777,7 +794,7 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
         narration: clean(item.narration),
         pricePaidUsd: item.pricePaidUsd != null && item.pricePaidUsd > 0 ? item.pricePaidUsd : null,
         seenReplacementUsd: item.seenReplacementUsd != null && item.seenReplacementUsd > 0 ? item.seenReplacementUsd : null,
-        roomTitle: room.title.trim(),
+        roomTitle: placeRoom(room.title, item.seenAtSec ?? item.saidAtSec ?? null, markers),
         seenAt: item.seenAtSec == null ? [] : [item.seenAtSec],
         saidAtSec: item.saidAtSec ?? null,
         countSettled: item.countSettled ?? true,
@@ -815,10 +832,15 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
       const existing = drafts.find((line) => line.roomTitle === draft.roomTitle && line.key === draft.key);
       if (!existing) {
         drafts.push(draft);
+        listedRoom.set(draft, room.title.trim().toLowerCase());
         continue;
       }
-      const nextCount = existing.count + draft.count;
-      if (existing.ageYears != null && draft.ageYears != null) {
+      // Listed under two rooms in one clip, then placed in the same tapped room: one object, not two.
+      const sameObjectTwice = listedRoom.get(existing) !== room.title.trim().toLowerCase();
+      const nextCount = sameObjectTwice ? Math.max(existing.count, draft.count) : existing.count + draft.count;
+      if (sameObjectTwice) {
+        existing.ageYears = existing.ageYears ?? draft.ageYears;
+      } else if (existing.ageYears != null && draft.ageYears != null) {
         existing.ageYears = (existing.ageYears * existing.count + draft.ageYears * draft.count) / nextCount;
       } else {
         existing.ageYears = null;
@@ -875,6 +897,8 @@ export function shapeWalkthrough(raw: unknown, priced: PricedLine[], kept: KeptL
     }
     let groupedNow = grouped;
     if (isDecor(draft)) groupedNow = false;
+    // A group of one is not a group: one object is its own row, with its own description.
+    else if (draft.count <= 1) groupedNow = false;
     else if (isBulkKind(draft)) groupedNow = true;
     else if (price != null && price >= GROUP_UNDER_USD) groupedNow = false;
     else if (price != null && price < GROUP_UNDER_USD && !draft.serial && !ALWAYS_ROW.has(draft.category)) groupedNow = true;

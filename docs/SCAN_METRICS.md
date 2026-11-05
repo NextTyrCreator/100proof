@@ -87,7 +87,7 @@ Fill this after the walk. Do not copy the Test 4 settled count forward.
 | Lines | |
 | With a brand | |
 | With a model name or number | |
-| Assessed at 75% or above | |
+| Assessed (75% or above under $250, 85% or above over) | |
 | Receipt at 99% | |
 | Over $250 waiting for a receipt | |
 | Replacement | |

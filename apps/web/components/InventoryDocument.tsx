@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
   cashValueTotal,
+  cashValueUnknown,
   enteredTotal,
   formatClock,
   formatMoney,
@@ -20,6 +21,11 @@ import {
 import { assessedReplacement } from "../lib/line-confidence";
 import { addressRegionLabel } from "../lib/address-search";
 import { downloadJson } from "../lib/inventory-export";
+import { clipRoomLabel } from "../lib/scan-rooms";
+import { askSameObject, photoBlob, verdictText } from "../lib/same-object-client";
+import { walkCounts, walkLabel } from "../lib/walk-compare";
+import { isUnfinished, linesMissingPictures, savedStills, sealFromSaved } from "../lib/finish-scan";
+import { cutFrames } from "../lib/clip-frames";
 import { AddressLine } from "./AddressLine";
 import { useInventory } from "./InventoryProvider";
 import { InventoryMeasures } from "./InventoryMeasures";
@@ -107,12 +113,81 @@ export function InventoryDocument() {
     updateRoomItem,
     addRoomItem,
     applyEvidence,
-    skipRequest,
     saveMedia,
     processingIds,
     listReady,
     deleteInventory,
+    answerRoomQuestion,
+    answerRepeatQuestion,
+    setRepeatCheck,
+    resolveIdentityCheck,
+    markProcessing,
+    sealRecord,
+    listMedia,
   } = useInventory();
+  const [roomAnswer, setRoomAnswer] = useState("");
+  const [finishing, setFinishing] = useState<{ done: number; total: number } | null>(null);
+
+  /**
+   * Finish a scan that was cut off. First the stills it already uploaded are put back on their lines.
+   * Then the rest are cut from the saved clips, one clip load each. The record is sealed after both.
+   */
+  async function finishNow(inventory: HomeInventory) {
+    if (finishing) return;
+    const missing = linesMissingPictures(inventory);
+    setFinishing({ done: 0, total: missing.length });
+    markProcessing(inventory.id, true);
+    let done = 0;
+    const step = () => {
+      done += 1;
+      setFinishing({ done, total: missing.length });
+    };
+    try {
+      const saved = savedStills(await listMedia(inventory.id), inventory.clips.map((clip) => clip.id));
+      const toCut = new Map<string, { src: string; lines: typeof missing }>();
+      for (const line of missing) {
+        const still = saved.get(line.item.id.slice(0, 8).toLowerCase());
+        if (still) {
+          updateRoomItem(inventory.id, line.roomId, line.item.id, { photoPath: still.path, photoUrl: still.url });
+          step();
+          continue;
+        }
+        if (!line.clipId || !line.src || line.atSec == null) {
+          step();
+          continue;
+        }
+        const group = toCut.get(line.clipId) ?? { src: line.src, lines: [] };
+        group.lines.push(line);
+        toCut.set(line.clipId, group);
+      }
+      const groups = [...toCut.values()];
+      for (let index = 0; index < groups.length; index += 2) {
+        await Promise.all(
+          groups.slice(index, index + 2).map(async ({ src, lines }) => {
+            const blobs = await cutFrames(src, lines.map((line) => line.atSec ?? 0));
+            await Promise.all(
+              lines.map(async (line, at) => {
+                const blob = blobs[at];
+                if (blob) {
+                  const path = await saveMedia(inventory.id, `${line.item.id.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}.jpg`, blob);
+                  if (path) updateRoomItem(inventory.id, line.roomId, line.item.id, { photoPath: path, photoUrl: URL.createObjectURL(blob) });
+                }
+                step();
+              }),
+            );
+          }),
+        );
+      }
+      const sealedAt = new Date().toISOString();
+      sealRecord(inventory.id, await sealFromSaved(inventory, sealedAt), sealedAt);
+    } finally {
+      markProcessing(inventory.id, false);
+      setFinishing(null);
+    }
+  }
+  const [checkingRepeat, setCheckingRepeat] = useState<string | null>(null);
+  /** Each saved question gets one photo comparison, the first time it is shown. */
+  const checkedRepeatsRef = useRef(new Set<string>());
   const [openId, setOpenId] = useState<string | null>(null);
   const [openedId, setOpenedId] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -149,12 +224,6 @@ export function InventoryDocument() {
     }
   }
 
-  function filmFocus(inventoryId: string, itemIds: string[]) {
-    selectInventory(inventoryId);
-    const focus = itemIds.slice(0, 10).map(encodeURIComponent).join(",");
-    router.push(`/scan?add=1&focus=${focus}`);
-  }
-
   function scanMore(inventoryId: string) {
     selectInventory(inventoryId);
     router.push("/scan?add=1");
@@ -164,6 +233,34 @@ export function InventoryDocument() {
     if (!summaryOpen) return;
     document.getElementById("summary")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [summaryOpen]);
+
+  const waitingRepeat = opened?.loaded ? (opened.repeatQuestions?.[0] ?? null) : null;
+  useEffect(() => {
+    if (!opened || !waitingRepeat || waitingRepeat.check || checkedRepeatsRef.current.has(waitingRepeat.id)) return;
+    checkedRepeatsRef.current.add(waitingRepeat.id);
+    const lines = opened.rooms.flatMap((room) => room.items);
+    const lineA = lines.find((line) => line.id === waitingRepeat.aId);
+    const lineB = lines.find((line) => line.id === waitingRepeat.bId);
+    if (!lineA?.photoUrl || !lineB?.photoUrl) return;
+    const inventoryId = opened.id;
+    const question = waitingRepeat;
+    setCheckingRepeat(question.id);
+    void (async () => {
+      const [a, b] = await Promise.all([photoBlob(lineA.photoUrl), photoBlob(lineB.photoUrl)]);
+      const check =
+        a && b
+          ? await askSameObject(
+              inventoryId,
+              { name: question.aName, room: question.aRoom, detail: lineA.detail, image: a },
+              { name: question.bName, room: question.bRoom, detail: lineB.detail, image: b },
+            )
+          : null;
+      if (check) setRepeatCheck(inventoryId, question.id, check);
+      setCheckingRepeat((current) => (current === question.id ? null : current));
+    })();
+    // One comparison per question; the ref keeps it from running again when the inventory re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingRepeat?.id, opened?.id]);
 
   async function sendProof() {
     if (!opened) return;
@@ -260,6 +357,7 @@ export function InventoryDocument() {
                 const cover = inventory.coverUrl || inventory.clips[0]?.posterUrl;
                 const facts = listFacts(inventory);
                 const saving = processingIds.includes(inventory.id);
+                const unfinished = !saving && isUnfinished(inventory);
                 const confirming = confirmDelete === inventory.id;
                 const deleting = deletingId === inventory.id;
                 return (
@@ -298,6 +396,8 @@ export function InventoryDocument() {
                                 <i />
                               </span>
                             </span>
+                          ) : unfinished ? (
+                            <span className="inventory-saving is-unfinished">Not finished · open it to finish the photos and the seal</span>
                           ) : facts ? (
                             <span className="inventory-pick-date">{facts}</span>
                           ) : null}
@@ -412,7 +512,11 @@ export function InventoryDocument() {
           <p className="confirm-address">{addressRegionLabel(opened.addressRegion)}</p>
         ) : null}
         {opened.homeAddress.trim() ? <AddressLine address={opened.homeAddress.trim()} within={locationWithin(opened)} /> : null}
-        {opened.recordHash ? <p className="record-hash">Record {opened.recordHash}</p> : null}
+        {opened.recordHash && opened.sealedAt ? (
+          <p className="record-hash" title={opened.recordHash}>
+            Sealed {formatWhen(opened.sealedAt)} · record {opened.recordHash.slice(0, 12)}…
+          </p>
+        ) : null}
         {SAVE_LINES[saveState] ? <p className="hint">{SAVE_LINES[saveState]}</p> : null}
         {clips.length > 0 ? (
           <details className="clip-fold">
@@ -426,7 +530,8 @@ export function InventoryDocument() {
         <ul className="rooms">
           {clips.map((clip, index) => {
             const open = openId === clip.id;
-            const title = clips.length > 1 ? `Walkthrough ${index + 1}` : "Walkthrough";
+            const rooms = clipRoomLabel(clip.rooms);
+            const title = rooms ? `Clip ${index + 1} · ${rooms}` : `Clip ${index + 1}`;
             return (
               <li key={clip.id} className="room">
                 <button type="button" className="room-main" aria-expanded={open} onClick={() => setOpenId(open ? null : clip.id)}>
@@ -505,6 +610,18 @@ export function InventoryDocument() {
           })}
         </ul>
         ) : null}
+        {finishing || (isUnfinished(opened) && !processingIds.includes(opened.id)) ? (
+          <div className="finish-row" role="status" aria-live="polite">
+            <span>
+              {finishing
+                ? `Finishing · pictures ${finishing.done} of ${finishing.total}`
+                : "Not finished · the line pictures and the seal did not save"}
+            </span>
+            <button type="button" className="button quiet" disabled={finishing != null} onClick={() => void finishNow(opened)}>
+              {finishing ? "Finishing" : "Finish now"}
+            </button>
+          </div>
+        ) : null}
         <ItemizedRooms
           inventoryId={opened.id}
           rooms={opened.rooms}
@@ -516,11 +633,158 @@ export function InventoryDocument() {
           onUpdateItem={updateRoomItem}
           onAddItem={addRoomItem}
           onEvidence={applyEvidence}
-          onSkip={skipRequest}
           onSaveMedia={saveMedia}
-          onFilmFocus={(itemIds) => filmFocus(opened.id, itemIds)}
-          onScanMore={() => scanMore(opened.id)}
+          onResolveIdentity={(itemId, pick) => resolveIdentityCheck(opened.id, itemId, pick)}
+          walk={opened.walkCompare ?? null}
         />
+        {opened.roomQuestions?.length || opened.repeatQuestions?.length || opened.walkCompare || roomAnswer ? (
+          <details className="sheet scan-notes">
+            <summary>
+              <span>Scan review</span>
+              <span className="room-meta">
+                {(opened.roomQuestions?.length ?? 0) + (opened.repeatQuestions?.length ?? 0) > 0
+                  ? `${(opened.roomQuestions?.length ?? 0) + (opened.repeatQuestions?.length ?? 0)} to check`
+                  : "Nothing to check"}
+              </span>
+              <span className="fold-mark" aria-hidden="true" />
+            </summary>
+        {opened.roomQuestions?.length ? (
+          <div className="sheet room-question" role="status" aria-live="polite">
+            {(() => {
+              const question = opened.roomQuestions[0];
+              if (!question) return null;
+              const more = opened.roomQuestions.length - 1;
+              return (
+                <>
+                  <p>
+                    Clip {question.clip} looks like {question.room} from {formatClock(question.atSec * 1000)}, but {question.tapped} was tapped.
+                    {more > 0 ? ` ${more} more after this.` : ""}
+                  </p>
+                  <div className="film-room-hint-actions">
+                    <button
+                      type="button"
+                      className="film-room is-add"
+                      onClick={() => {
+                        const moved = answerRoomQuestion(opened.id, question.id, true);
+                        setRoomAnswer(
+                          moved > 0
+                            ? `Moved ${moved} ${moved === 1 ? "line" : "lines"} from clip ${question.clip} to ${question.room}.`
+                            : `Nothing moved. Those lines were also seen in another clip, so they stay in ${question.tapped}.`,
+                        );
+                      }}
+                    >
+                      Move those lines to {question.room}
+                    </button>
+                    <button
+                      type="button"
+                      className="film-room"
+                      onClick={() => {
+                        answerRoomQuestion(opened.id, question.id, false);
+                        setRoomAnswer("");
+                      }}
+                    >
+                      Keep {question.tapped}
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        ) : null}
+        {roomAnswer ? <p className="hint">{roomAnswer}</p> : null}
+        {opened.walkCompare ? (
+          <div className="sheet walk-compare" role="status">
+            {(() => {
+              const compare = opened.walkCompare;
+              const counts = walkCounts(compare);
+              const notSeen = compare.entries.filter((entry) => entry.status === "not seen");
+              return (
+                <>
+                  <p className="walk-compare-head">
+                    Before and after, walk of {new Date(compare.at).toLocaleDateString(undefined, { month: "long", day: "numeric" })}: {counts.seen + counts.moved + counts.changed} seen again
+                    {counts.moved > 0 ? `, ${counts.moved} moved` : ""}
+                    {counts.changed > 0 ? `, ${counts.changed} with new damage` : ""}
+                    {counts.possible > 0 ? `, ${counts.possible} possible ${counts.possible === 1 ? "match" : "matches"}` : ""}, {counts.notSeen} not seen, {counts.notChecked} not checked, {counts.added} new.
+                  </p>
+                  {notSeen.length > 0 ? (
+                    <ul className="walk-compare-list">
+                      {notSeen.slice(0, 8).map((entry) => (
+                        <li key={entry.ids.join("|")}>
+                          <strong>{entry.name}</strong> · {entry.room} · {walkLabel(entry, compare.since)}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  <p className="read-twice-note">Not seen means this walk did not show it. It does not mean missing. Rooms the walk did not enter are not checked.</p>
+                </>
+              );
+            })()}
+          </div>
+        ) : null}
+        {opened.repeatQuestions?.length ? (
+          <div className="sheet room-question" role="status" aria-live="polite">
+            {(() => {
+              const question = opened.repeatQuestions[0];
+              if (!question) return null;
+              const more = opened.repeatQuestions.length - 1;
+              const lines = opened.rooms.flatMap((room) => room.items);
+              const sides = [
+                { id: question.aId, name: question.aName, room: question.aRoom },
+                { id: question.bId, name: question.bName, room: question.bRoom },
+              ].map((side) => ({ ...side, line: lines.find((line) => line.id === side.id) ?? null }));
+              return (
+                <>
+                  <p>
+                    Possible repeat. {question.reason}
+                    {more > 0 ? ` ${more} more after this.` : ""}
+                  </p>
+                  <div className="repeat-pair">
+                    {sides.map((side) => (
+                      <div className="repeat-side" key={side.id}>
+                        {side.line?.photoUrl ? (
+                          // A still from this inventory's own scan, served by an expiring link.
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={side.line.photoUrl} alt="" loading="lazy" />
+                        ) : (
+                          <span className="repeat-thumb" aria-hidden="true" />
+                        )}
+                        <strong>{side.name}</strong>
+                        <span>{side.room}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {verdictText(question.check, checkingRepeat === question.id) ? (
+                    <p className="repeat-verdict">{verdictText(question.check, checkingRepeat === question.id)}</p>
+                  ) : null}
+                  <div className="film-room-hint-actions">
+                    <button
+                      type="button"
+                      className="film-room is-add"
+                      onClick={() => {
+                        const merged = answerRepeatQuestion(opened.id, question.id, true);
+                        setRoomAnswer(merged ? `Merged into one line, seen in ${question.aRoom === question.bRoom ? question.aRoom : `${question.aRoom} and ${question.bRoom}`}.` : "Those lines are no longer both on the list.");
+                      }}
+                    >
+                      Same item
+                    </button>
+                    <button
+                      type="button"
+                      className="film-room"
+                      onClick={() => {
+                        answerRepeatQuestion(opened.id, question.id, false);
+                        setRoomAnswer("");
+                      }}
+                    >
+                      Two items
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        ) : null}
+          </details>
+        ) : null}
         <div className="sheet-actions">
           <button type="button" className="button quiet" onClick={() => scanMore(opened.id)}>
             Scan more
@@ -536,7 +800,8 @@ export function InventoryDocument() {
           <p className="total-label">Summary</p>
           <h2>Proof document</h2>
           <p className="total-note">
-            Download the inventory, email it, or send it. Lines at 75% or above are in the assessed value. A receipt is 99%. 100proof does not decide coverage, and this file is not a sworn proof of loss.
+            Download the inventory, email it, or send it. A line is in the assessed value at 75% or above when it is under $250, and at 85% or above
+            when it is over. A receipt or an attached appraisal is 99%. 100proof does not decide coverage, and this file is not a sworn proof of loss.
           </p>
           <p className="summary-total">
             <span>Assessed value</span>
@@ -552,6 +817,12 @@ export function InventoryDocument() {
             <span>Cash value estimate</span>
             <span>{cashValueTotal(opened) > 0 ? formatMoney(cashValueTotal(opened)) : "—"}</span>
           </p>
+          {cashValueUnknown(opened) > 0 ? (
+            <p className="total-note">
+              {cashValueUnknown(opened)} {cashValueUnknown(opened) === 1 ? "line has" : "lines have"} no cash value yet because the age is not known. Add the
+              year bought on the line, or a photo of its label, to set it.
+            </p>
+          ) : null}
           <p className="summary-total">
             <span>Entered total</span>
             <span>{hasValue ? formatMoney(enteredTotal(items)) : "—"}</span>

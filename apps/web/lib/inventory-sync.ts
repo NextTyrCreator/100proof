@@ -3,6 +3,23 @@ import { ADDRESS_REGION_IDS } from "./address-search";
 import { locationCheckedAt, locationWithin, type HomeInventory } from "./inventory";
 import { savedDocumentSchema, type ItemEvent, type SaveRequest } from "./inventory-record";
 import { reviewResultSchema } from "./review-shape";
+import { cleanItemName } from "./scan-rooms";
+
+/**
+ * Saved lines from before the cleanup can still carry a room in the name, such as "Walkthrough: wall mirror".
+ * They get the same cleanup a new line gets, on the name and on the kind.
+ */
+export function cleanRoomNames<T extends { title: string; items: { name: string; itemType: string | null }[] }>(rooms: T[]): T[] {
+  const titles = rooms.map((room) => room.title);
+  return rooms.map((room) => ({
+    ...room,
+    items: room.items.map((item) => ({
+      ...item,
+      name: cleanItemName(item.name, titles),
+      itemType: item.itemType ? cleanItemName(item.itemType, titles) : item.itemType,
+    })),
+  }));
+}
 
 /** Ready to save once it has a title, a country, an address, and one reviewed clip. */
 export function savable(inventory: HomeInventory) {
@@ -40,9 +57,14 @@ export function toSaveRequest(inventory: HomeInventory, events: ItemEvent[]): Sa
       storagePath: clip.storagePath,
       posterPath: clip.posterPath,
       spoken: clip.spoken,
+      ...(clip.rooms?.length ? { rooms: clip.rooms.slice(0, 20) } : {}),
     })),
     items: inventory.items.map((item) => ({ ...item, photoUrl: null, sourceUrl: null })),
     coverPath: inventory.clips.find((clip) => clip.posterPath)?.posterPath ?? null,
+    ...(inventory.roomQuestions?.length ? { roomQuestions: inventory.roomQuestions.slice(-40) } : {}),
+    ...(inventory.repeatQuestions?.length ? { repeatQuestions: inventory.repeatQuestions.slice(-40) } : {}),
+    ...(inventory.walkCompare ? { walkCompare: inventory.walkCompare } : {}),
+    ...(inventory.scanStats?.length ? { scanStats: inventory.scanStats.slice(-20) } : {}),
   });
   if (!document.success) return null;
   return {
@@ -126,9 +148,13 @@ export function fromLoaded(payload: unknown): HomeInventory | null {
     locationCheck: data.document.locationCheck,
     recordHash: data.recordHash,
     sealedAt: data.sealedAt,
-    rooms: data.document.rooms,
+    rooms: cleanRoomNames(data.document.rooms),
     clips: data.document.clips.map((clip) => ({ ...clip, sourceKept: true as const })),
     items: data.document.items,
+    roomQuestions: data.document.roomQuestions ?? [],
+    repeatQuestions: data.document.repeatQuestions ?? [],
+    walkCompare: data.document.walkCompare ?? null,
+    scanStats: data.document.scanStats ?? [],
     savedVersion: data.version,
     loaded: true,
     createdAt: data.createdAt,

@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { HIGH_VALUE_OVER_USD, type ChangeSource, type Condition, type Damage, type ItemChange, type RoomItem, type RoomShard } from "./inventory";
+import { APPRAISAL_BASIS, appraisalDocumented } from "./line-confidence";
 import { conditionSchema, damageSchema, normLabel, revalue, worseCondition, worseDamage, type ReviewResult } from "./review-shape";
 
 export type ItemPatch = {
   userNote?: string;
   userValueUsd?: number | null;
   appraisalUsd?: number | null;
+  appraisalFileId?: string | null;
   selfDeclaredUsd?: number | null;
   photoUrl?: string | null;
   photoPath?: string | null;
@@ -30,7 +32,41 @@ export type ItemPatch = {
   files?: RoomItem["files"];
 };
 
-export type ReviewMode = "replace" | "append" | "continue" | "focus";
+/**
+ * "refresh" puts a later copy of lines that are already saved (stills and labels read after the first
+ * save) onto those same lines by id. It never adds a line, never brings back one the person deleted,
+ * and keeps what the person changed in between.
+ */
+export type ReviewMode = "replace" | "append" | "continue" | "focus" | "refresh";
+
+function refreshRooms(current: RoomShard[], incoming: RoomShard[]): RoomShard[] {
+  const fresh = new Map(incoming.flatMap((room) => room.items).map((item) => [item.id, item]));
+  return current.map((room) => ({
+    ...room,
+    items: room.items.map((existing) => {
+      const next = fresh.get(existing.id);
+      if (!next) return existing;
+      const known = new Set(existing.changes.map((entry) => entry.id));
+      return {
+        ...next,
+        hidden: existing.hidden,
+        declared: existing.declared,
+        userNote: existing.userNote,
+        userValueUsd: existing.userValueUsd,
+        selfDeclaredUsd: existing.selfDeclaredUsd,
+        appraisalUsd: existing.appraisalUsd,
+        appraisalFileId: existing.appraisalFileId,
+        files: existing.files,
+        photoUrl: next.photoPath ? next.photoUrl : existing.photoUrl,
+        photoPath: next.photoPath ?? existing.photoPath,
+        said: existing.said.length >= next.said.length ? existing.said : next.said,
+        skipped: existing.skipped,
+        identityCheck: existing.identityCheck?.resolved ? existing.identityCheck : (next.identityCheck ?? existing.identityCheck),
+        changes: [...existing.changes, ...next.changes.filter((entry) => !known.has(entry.id))].slice(-40),
+      };
+    }),
+  }));
+}
 
 function samePiece(existing: RoomItem, item: RoomItem) {
   return (
@@ -179,6 +215,7 @@ export function mergeRooms(
   mode: Exclude<ReviewMode, "replace">,
   focusIds: string[] = [],
 ): RoomShard[] {
+  if (mode === "refresh") return refreshRooms(current, incoming);
   const rooms = current.map((room) => ({ ...room, items: room.items.map((item) => ({ ...item })) }));
   const focused = new Set(focusIds);
 
@@ -268,6 +305,35 @@ export function combinePieceReviews(base: ReviewResult, next: ReviewResult): Rev
 }
 
 /** Put the clip id on each sighting and quote that came back from that clip. */
+/**
+ * The person said yes to a room-change prompt: lines first found in that clip, from that second on,
+ * move from the room that was tapped to the room they were really in. Lines also seen in another clip stay.
+ */
+export function moveClipLines(review: ReviewResult, clipId: string, fromSec: number, fromRoom: string, toRoom: string) {
+  const from = fromRoom.trim().toLowerCase();
+  const moved: RoomItem[] = [];
+  const kept = review.rooms
+    .map((room) => {
+      if (room.title.trim().toLowerCase() !== from) return room;
+      const stay: RoomItem[] = [];
+      for (const item of room.items) {
+        const here = item.sightings.filter((sighting) => sighting.clipId === clipId);
+        const elsewhere = item.sightings.some((sighting) => sighting.clipId !== clipId);
+        const late = here.length > 0 && here.every((sighting) => sighting.atSec != null && sighting.atSec >= fromSec);
+        if (late && !elsewhere) moved.push(item);
+        else stay.push(item);
+      }
+      return { ...room, items: stay };
+    })
+    .filter((room) => room.items.length > 0);
+  if (moved.length === 0) return { review, moved: 0, ids: [] as string[] };
+  return {
+    review: { rooms: mergeRooms(kept, [{ id: crypto.randomUUID(), title: toRoom, items: moved }], "continue") },
+    moved: moved.length,
+    ids: moved.map((item) => item.id),
+  };
+}
+
 export function tagReview(review: ReviewResult, clipId: string): ReviewResult {
   return {
     rooms: review.rooms.map((room) => ({
@@ -343,13 +409,15 @@ export function applyPatch(item: RoomItem, patch: ItemPatch): RoomItem | null {
   const declared = patch.declared === undefined ? undefined : z.boolean().safeParse(patch.declared);
   const selfDeclared = money(patch.selfDeclaredUsd);
   const appraisal = money(patch.appraisalUsd);
-  const checks = [note, price, replacement, cash, photo, photoPath, basis, brand, markings, worn, source, serial, pricedAt, ageYears, count, condition, damage, usefulLifeYears, files, hidden, declared, selfDeclared, appraisal];
+  const appraisalFile = patch.appraisalFileId === undefined ? undefined : z.string().uuid().nullable().safeParse(patch.appraisalFileId);
+  const checks = [note, price, replacement, cash, photo, photoPath, basis, brand, markings, worn, source, serial, pricedAt, ageYears, count, condition, damage, usefulLifeYears, files, hidden, declared, selfDeclared, appraisal, appraisalFile];
   if (checks.some((check) => check && !check.success)) return null;
   const next: RoomItem = {
     ...item,
     userNote: note?.success ? note.data : item.userNote,
     userValueUsd: price?.success ? price.data : item.userValueUsd,
     appraisalUsd: appraisal?.success ? appraisal.data : item.appraisalUsd,
+    appraisalFileId: appraisalFile?.success ? appraisalFile.data : item.appraisalFileId,
     selfDeclaredUsd: selfDeclared?.success ? selfDeclared.data : item.selfDeclaredUsd,
     photoUrl: photo?.success ? photo.data : item.photoUrl,
     photoPath: photoPath?.success ? photoPath.data : item.photoPath,
@@ -374,6 +442,14 @@ export function applyPatch(item: RoomItem, patch: ItemPatch): RoomItem | null {
     declared: declared?.success ? declared.data : item.declared,
   };
   if (next.damage) next.condition = "damaged";
+  // A documented appraisal outranks a later comparable, label read, or receipt check.
+  if (appraisalDocumented(next) && next.appraisalUsd != null && next.priceUsd !== next.appraisalUsd) {
+    next.priceUsd = next.appraisalUsd;
+    next.valueBasis = APPRAISAL_BASIS;
+    const worn = revalue(next);
+    next.cashValueUsd = worn?.cash ?? null;
+    next.depreciationNote = worn?.note ?? null;
+  }
   if (next.brand) next.likelyBrand = null;
   next.highValue = (next.priceUsd ?? 0) > HIGH_VALUE_OVER_USD;
   if (next.identitySettled) next.options = [];

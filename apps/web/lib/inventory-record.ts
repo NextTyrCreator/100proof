@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { reviewResultSchema } from "./review-shape";
+import { repeatQuestionSchema } from "./repeat-match";
+import { walkCompareSchema } from "./walk-compare";
+import { scanStatsSchema } from "./scan-stats";
+import { roomMarkersSchema, roomQuestionSchema } from "./scan-rooms";
 
 /** Version 1 of a saved inventory. Media is saved as private storage paths, never as URLs. */
 
@@ -23,6 +27,7 @@ const savedClipSchema = z.object({
   storagePath: pathSchema.nullable(),
   posterPath: pathSchema.nullable(),
   spoken: z.array(spokenLineSchema).max(60),
+  rooms: roomMarkersSchema.optional(),
 });
 
 const enteredItemSchema = z.object({
@@ -55,6 +60,10 @@ export const savedDocumentSchema = z.object({
   clips: z.array(savedClipSchema).max(40),
   items: z.array(enteredItemSchema).max(40),
   coverPath: pathSchema.nullable(),
+  roomQuestions: z.array(roomQuestionSchema).max(40).optional(),
+  repeatQuestions: z.array(repeatQuestionSchema).max(40).optional(),
+  walkCompare: walkCompareSchema.nullable().optional(),
+  scanStats: z.array(scanStatsSchema).max(20).optional(),
 });
 
 export const itemEventSchema = z.object({

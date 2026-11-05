@@ -6,6 +6,7 @@
  *
  * Nothing here is a public accuracy claim. The match score is a benchmark against this one list.
  */
+import { z } from "zod";
 
 type CountAs = "item" | "items" | "arrangement" | "pair" | "set" | "dumbbells" | "lot";
 
@@ -105,13 +106,33 @@ type RunInput = {
   includedUnits: number;
   /** Expected units the walk never put on camera. A subset of the misses; a filming issue, still a miss. */
   notExposedUnits: number;
+  /**
+   * The scorer's checkbox: were what-belongs-here reminders on during this walk? A reminder can lead the
+   * person to film more, so it is recorded with the run. It changes nothing in the scan itself.
+   */
+  remindersOn: boolean;
 };
+
+export type RunInputShape = RunInput;
+
+/** The scorer's input file for one run, as the metrics command reads it. */
+export const runInputSchema = z.object({
+  correct: z.record(z.string(), z.number().int().nonnegative().max(1000)).transform((entries) => Object.fromEntries(Object.entries(entries).map(([id, units]) => [Number(id), units]))),
+  duplicateUnits: z.number().int().nonnegative(),
+  phantomUnits: z.number().int().nonnegative(),
+  improperInclusionUnits: z.number().int().nonnegative(),
+  unresolvedUnits: z.number().int().nonnegative(),
+  includedUnits: z.number().int().nonnegative(),
+  notExposedUnits: z.number().int().nonnegative(),
+  remindersOn: z.boolean(),
+});
 
 type RunScore =
   | { status: "invalid"; reason: string }
-  | { status: "pending"; reason: string; truePositives: number; falseNegatives: number; falsePositives: number }
+  | { status: "pending"; reason: string; truePositives: number; falseNegatives: number; falsePositives: number; remindersOn: boolean }
   | {
       status: "scored";
+      remindersOn: boolean;
       truePositives: number;
       falseNegatives: number;
       falsePositives: number;
@@ -161,7 +182,14 @@ export function scoreRun(input: RunInput, expected: ExpectedEntry[] = EXPECTED):
     return { status: "invalid", reason: `Included units (${input.includedUnits}) do not reconcile to correct (${truePositives}) plus extra (${falsePositives}).` };
   }
   if (input.unresolvedUnits > 0) {
-    return { status: "pending", reason: `${input.unresolvedUnits} inclusion decision(s) unresolved. Final score withheld.`, truePositives, falseNegatives, falsePositives };
+    return {
+      status: "pending",
+      reason: `${input.unresolvedUnits} inclusion decision(s) unresolved. Final score withheld.`,
+      truePositives,
+      falseNegatives,
+      falsePositives,
+      remindersOn: input.remindersOn,
+    };
   }
 
   const denominator = truePositives + falseNegatives + falsePositives;
@@ -171,6 +199,7 @@ export function scoreRun(input: RunInput, expected: ExpectedEntry[] = EXPECTED):
   const exact = truePositives === expectedUnits && falsePositives === 0;
   return {
     status: "scored",
+    remindersOn: input.remindersOn,
     truePositives,
     falseNegatives,
     falsePositives,
@@ -224,6 +253,11 @@ export function scoreSeries(runs: RunScore[]) {
   if (runs.length > RESEARCH_SERIES.runs) {
     return { status: "invalid" as const, reason: `A series is ${RESEARCH_SERIES.runs} scored runs. This has ${runs.length}. Start a new series.` };
   }
+  const settings = new Set(runs.map((run) => (run.status === "scored" ? run.remindersOn : null)));
+  if (settings.size > 1) {
+    return { status: "invalid" as const, reason: "A series uses one reminder setting. These runs mix reminders on and off. Start a new series." };
+  }
+  const remindersOn = runs[0]?.status === "scored" ? runs[0].remindersOn : false;
 
   const scores = runs.map((run) => (run.status === "scored" ? run.matchScore : 0));
   const mean = scores.reduce((sum, score) => sum + score, 0) / scores.length;
@@ -234,7 +268,7 @@ export function scoreSeries(runs: RunScore[]) {
   const consistent = variance <= RESEARCH_SERIES.maxVariance;
   const result =
     atTarget && consistent ? "meets target" : atTarget ? "inconsistent" : consistent ? "below target" : "below target and inconsistent";
-  return { status: "recorded" as const, scores, average, variance, spread, atTarget, consistent, result };
+  return { status: "recorded" as const, scores, average, variance, spread, atTarget, consistent, result, remindersOn };
 }
 
 /** A run input where every expected unit is credited. The starting point for scoring a walk by hand. */

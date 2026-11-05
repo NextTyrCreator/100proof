@@ -1,4 +1,5 @@
 import { HIGH_VALUE_OVER_USD, type ItemChange, type RoomItem, type RoomShard } from "./inventory";
+import { APPRAISAL_BASIS, appraisalDocumented, statedUsd } from "./line-confidence";
 import type { KnownSoFar, LineToPrice, LineToReconcile, ReconcileAnswer } from "./review-scan";
 import {
   CATEGORIES,
@@ -108,6 +109,7 @@ export function linesToPrice(review: ReviewResult, alreadySent: Set<string>) {
       color: first.color,
       size: first.size,
       options: first.identitySettled ? [] : first.options.slice(0, 3),
+      paidUsd: statedUsd(first),
     });
     idsByKey.set(first.id, items.map((item) => item.id));
     descriptions.push(description);
@@ -125,13 +127,13 @@ function cashFor(item: RoomItem, replacement: number) {
   return depreciate(replacement, item.ageYears, life, item.condition, item.damage);
 }
 
-/** A stated price holds the comparable. A formal appraisal is the only amount that may sit far above it. */
-export function heldNearPaid(paid: number | null, proposed: number, appraisal: number | null) {
-  if (appraisal != null && appraisal > 0) return { price: appraisal, held: false, appraisal: true };
-  if (paid != null && paid > 0 && proposed > paid * 4) {
-    return { price: Math.round(paid * 4 * 100) / 100, held: true, appraisal: false };
-  }
-  return { price: proposed, held: false, appraisal: false };
+/**
+ * A documented appraisal is the value. Otherwise the comparable is kept as found. A stated price outside
+ * half to double of it is not clamped to a number no page shows; the line is held at 50% and asks instead.
+ */
+export function pricedFrom(item: RoomItem, proposed: number) {
+  if (appraisalDocumented(item) && item.appraisalUsd != null) return { price: item.appraisalUsd, appraisal: true };
+  return { price: proposed, appraisal: false };
 }
 function checkedBasis(item: RoomItem, basis: string) {
   const text = basis.trim().slice(0, 300) || "Local replacement.";
@@ -159,20 +161,15 @@ export function applyPrices(
       items: room.items.map((item) => {
         const hit = byId.get(item.id);
         if (!hit || hit.replacementUsd == null) return item;
-        const bounded = heldNearPaid(item.userValueUsd, hit.replacementUsd, item.appraisalUsd);
+        const bounded = pricedFrom(item, hit.replacementUsd);
         const worn = cashFor(item, bounded.price);
-        const basis = bounded.appraisal
-          ? "Appraisal: formal value on file."
-          : bounded.held
-            ? "Comparable: held near the price you stated. No formal appraisal on file."
-            : checkedBasis(item, hit.basis);
         return {
           ...item,
           priceUsd: bounded.price,
           cashValueUsd: worn.cash,
           depreciationNote: worn.note,
-          valueBasis: basis,
-          sourceUrl: bounded.held || bounded.appraisal ? item.sourceUrl : httpUrl(hit.sourceUrl),
+          valueBasis: bounded.appraisal ? APPRAISAL_BASIS : checkedBasis(item, hit.basis),
+          sourceUrl: bounded.appraisal ? item.sourceUrl : httpUrl(hit.sourceUrl),
           pricedAt,
           highValue: bounded.price > HIGH_VALUE_OVER_USD,
         };
@@ -267,6 +264,8 @@ function joinInto(keeper: RoomItem, other: RoomItem): RoomItem {
     age: keeper.age ?? other.age,
     narration: keeper.narration ?? other.narration,
     userValueUsd: keeper.userValueUsd ?? other.userValueUsd,
+    appraisalUsd: keeper.appraisalUsd ?? other.appraisalUsd,
+    appraisalFileId: keeper.appraisalFileId ?? other.appraisalFileId,
     photoUrl: keeper.photoUrl ?? other.photoUrl,
     photoPath: keeper.photoPath ?? other.photoPath,
     files: [...keeper.files, ...other.files.filter((file) => !keeper.files.some((kept) => kept.id === file.id))].slice(0, 8),
@@ -448,10 +447,7 @@ export function applyReconcile(
     for (const other of members.slice(1)) {
       if (!accepted.every((member) => canJoin(member, other))) continue;
       accepted.push(other);
-      keeper = joinInto(keeper, other);
-      const fromRoom = where.get(other.id);
-      if (fromRoom) fromRoom.items = fromRoom.items.filter((item) => item.id !== other.id);
-      where.delete(other.id);
+      keeper = absorb(where, keeper, other);
       joined += 1;
     }
     const home = where.get(keeper.id);
@@ -459,4 +455,57 @@ export function applyReconcile(
   }
 
   return { review: { rooms: rooms.filter((room) => room.items.length > 0) }, joined, roomsFolded, fixed };
+}
+
+/** Join one line into another and note the other room when the object was seen in two. */
+function absorb(where: Map<string, RoomShard>, keeper: RoomItem, other: RoomItem) {
+  let next = joinInto(keeper, other);
+  const home = where.get(keeper.id);
+  const fromRoom = where.get(other.id);
+  if (home && fromRoom && home.title.trim().toLowerCase() !== fromRoom.title.trim().toLowerCase()) {
+    const note = `Also seen in ${fromRoom.title}.`;
+    if (!next.detail.includes(note)) next = { ...next, detail: `${next.detail} ${note}`.trim().slice(0, 400) };
+    const last = next.changes[next.changes.length - 1];
+    if (last) {
+      last.before = { ...last.before, room: fromRoom.title.slice(0, 80) };
+      last.after = { ...last.after, room: home.title.slice(0, 80) };
+    }
+  }
+  if (fromRoom) fromRoom.items = fromRoom.items.filter((item) => item.id !== other.id);
+  where.delete(other.id);
+  return next;
+}
+
+/**
+ * Merge the sure pairs from the identity rules (`repeat-match.ts`). Those rules already refuse two serials,
+ * two models, two brands, two colors, and one clip, and allow a line filed as "other" to join its kind.
+ */
+export function joinSurePairs(review: ReviewResult, pairs: { aId: string; bId: string }[]) {
+  let next = review;
+  let joined = 0;
+  for (const pair of pairs) {
+    const result = joinRepeatPair(next, pair.aId, pair.bId);
+    if (!result.joined) continue;
+    next = result.review;
+    joined += 1;
+  }
+  return { review: next, joined };
+}
+
+/**
+ * The person said two lines are one object. Their answer is the evidence, so only a line that is gone
+ * stops it. The line with more evidence is kept, with the larger count, the better photo, and both rooms.
+ */
+export function joinRepeatPair(review: ReviewResult, aId: string, bId: string): { review: ReviewResult; joined: boolean; keptId: string | null } {
+  const rooms: RoomShard[] = review.rooms.map((room) => ({ ...room, items: room.items.map((item) => ({ ...item })) }));
+  const where = new Map<string, RoomShard>();
+  for (const room of rooms) for (const item of room.items) where.set(item.id, room);
+  const a = where.get(aId)?.items.find((item) => item.id === aId);
+  const b = where.get(bId)?.items.find((item) => item.id === bId);
+  if (!a || !b || aId === bId) return { review, joined: false, keptId: null };
+  const [first, second] = evidenceWeight(a) >= evidenceWeight(b) ? [a, b] : [b, a];
+  const keeper = absorb(where, first, second);
+  const home = where.get(keeper.id);
+  if (home) home.items = home.items.map((item) => (item.id === keeper.id ? keeper : item));
+  return { review: { rooms: rooms.filter((room) => room.items.length > 0) }, joined: true, keptId: keeper.id };
 }

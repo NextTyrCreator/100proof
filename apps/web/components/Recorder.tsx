@@ -10,6 +10,7 @@ import { formatClock, sha256Hex, type SpokenLine } from "../lib/inventory";
 import { keptFromInventories, readKeptValues, rememberKeptValues } from "../lib/kept-values";
 import { narrationTap, type NarrationTap } from "../lib/scan-audio";
 import { makeRecorder, scaledCapture, type ScaledCapture } from "../lib/scan-capture";
+import { DEMO_ROOMS, MORE_ROOMS, ROOM_NOT_SET, roomAt, withMarker, withoutTappedFolds, type RoomHint, type RoomMarker, type RoomQuestion } from "../lib/scan-rooms";
 import {
   ADD_LIMIT_MS,
   CLIP_MS,
@@ -25,11 +26,19 @@ import {
   type CloseReason,
   type SessionClock,
 } from "../lib/scan-session";
-import { applyPrices, applyReconcile, knownSoFar, linesToPrice, reconcileInput, shareKnownPrices } from "../lib/scan-pipeline";
+import { applyPrices, applyReconcile, joinRepeatPair, joinSurePairs, knownSoFar, linesToPrice, reconcileInput, shareKnownPrices } from "../lib/scan-pipeline";
 import type { LineToPrice } from "../lib/review-scan";
+import { notHereKey, withoutNotHere, type BelongsQuestion } from "../lib/belongs";
 import { reviewResultSchema, type PricedLine, type ReviewResult } from "../lib/review-shape";
 import { spokenLineSchema } from "../lib/inventory-record";
-import { combinePieceReviews, patchReviewItem, tagReview } from "../lib/inventory-merge";
+import { combinePieceReviews, moveClipLines, patchReviewItem, tagReview } from "../lib/inventory-merge";
+import { crossPairs, pairKey, repeatPairs, repeatQuestions, type RepeatQuestion } from "../lib/repeat-match";
+import { askSameObject, photoBlob, verdictText } from "../lib/same-object-client";
+import type { IdentityCheck } from "../lib/identity-check";
+import { compareReads, needsReadTwice, withIdentityCheck } from "../lib/read-twice";
+import { askReadTwice } from "../lib/read-twice-client";
+import { compareWalks, type WalkCompare } from "../lib/walk-compare";
+import { blankScanStats, type ScanStats } from "../lib/scan-stats";
 import { useInventory } from "./InventoryProvider";
 import { ItemizedRooms } from "./ItemizedRooms";
 import { Loader } from "./Loader";
@@ -68,13 +77,45 @@ function videoConstraints(facing: Facing): MediaTrackConstraints {
   };
 }
 
-type RecordedPiece = { id: string; blob: Blob; audio: Blob | null; startedAt: string; durationMs: number; posterUrl: string };
+type RecordedPiece = {
+  id: string;
+  blob: Blob;
+  audio: Blob | null;
+  startedAt: string;
+  durationMs: number;
+  posterUrl: string;
+  rooms: RoomMarker[];
+};
 
-type PieceResult = { review: ReviewResult; spoken: SpokenLine[] };
+type PieceResult = { review: ReviewResult; spoken: SpokenLine[]; roomHint?: RoomHint | null };
+
+/** A room change the listing saw with no tap. Asked once; nothing moves until the person says so. */
+type RoomPrompt = RoomQuestion;
+
+type RepeatPrompt = RepeatQuestion & { checking: boolean; cross: boolean };
+
+/** At most this many photo comparisons in one scan. The rest are asked without one. */
+const PHOTO_CHECKS_PER_SCAN = 12;
+/** At most this many lines read twice in one scan, two calls each. */
+const READ_TWICE_PER_SCAN = 15;
 
 type PieceOutcome = { ok: true; result: PieceResult } | { ok: false; error: string; retry: boolean };
 
-const pieceResponseSchema = z.object({ review: reviewResultSchema, spoken: z.array(spokenLineSchema).max(60) });
+const belongsResponseSchema = z.object({
+  questions: z
+    .array(z.object({ thing: z.string().trim().min(1).max(40), question: z.string().trim().min(1).max(120), reason: z.string().max(100) }))
+    .max(3),
+});
+
+const pieceResponseSchema = z.object({
+  review: reviewResultSchema,
+  spoken: z.array(spokenLineSchema).max(60),
+  roomHint: z
+    .object({ room: z.string().trim().min(1).max(80), atSec: z.number().finite().nonnegative().max(600) })
+    .nullable()
+    .optional()
+    .catch(null),
+});
 const pieceErrorSchema = z.object({ error: z.string().max(300).optional(), retry: z.boolean().optional() });
 const priceResponseSchema = z.object({
   priced: z
@@ -112,7 +153,7 @@ const reconcileResponseSchema = z.object({
     .catch(undefined),
 });
 
-const PRICE_BATCH = 30;
+const PRICE_BATCH = 8;
 
 function prepareVideo(video: HTMLVideoElement) {
   video.muted = true;
@@ -172,9 +213,19 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
     saveMedia,
     updateClip,
     applyEvidence,
-    skipRequest,
     markProcessing,
+    addRoomQuestions,
+    answerRoomQuestion,
+    addRepeatQuestions,
+    answerRepeatQuestion,
+    setRepeatCheck,
+    joinLines,
+    setIdentityCheck,
+    resolveIdentityCheck,
+    setWalkCompare,
+    saveScanStats,
   } = useInventory();
+  const roomNoteTimerRef = useRef<number | null>(null);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
 
@@ -213,6 +264,60 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
   const autoStartedRef = useRef(false);
   const [facing, setFacing] = useState<Facing>("environment");
   const [flipping, setFlipping] = useState(false);
+  const roomRef = useRef<string | null>(null);
+  const markersRef = useRef<RoomMarker[]>([]);
+  const [room, setRoom] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [newRoom, setNewRoom] = useState("");
+  /** Waiting room-change questions, oldest first. The ref is what saving reads, so none is lost. */
+  const roomPromptsRef = useRef<RoomPrompt[]>([]);
+  const [roomPrompts, setRoomPromptsState] = useState<RoomPrompt[]>([]);
+  const [roomNoteText, setRoomNoteText] = useState("");
+  /** Rooms the person said no to since their last tap, so the same prompt does not come back. */
+  const declinedRoomsRef = useRef(new Set<string>());
+  const roomPrompt = roomPrompts[0] ?? null;
+
+  function setRoomPrompts(next: RoomPrompt[]) {
+    roomPromptsRef.current = next;
+    setRoomPromptsState(next);
+  }
+
+  /**
+   * Possible repeats found while filming, oldest first, each with Muse Spark 1.3's photo comparison once
+   * it is back. A cross pair is a new line against a line already saved on a Scan more inventory.
+   */
+  const repeatPromptsRef = useRef<RepeatPrompt[]>([]);
+  const [repeatPrompts, setRepeatPromptsState] = useState<RepeatPrompt[]>([]);
+  const declinedRepeatsRef = useRef(new Set<string>());
+  const photoChecksRef = useRef(0);
+  /** Sure matches between a Scan more line and a saved line, joined right after the save. */
+  const pendingJoinsRef = useRef<[string, string][]>([]);
+  /** A Scan more walk compared with the saved lines, saved with the inventory. */
+  const walkCompareRef = useRef<WalkCompare | null>(null);
+  /** Research counters for this scan. Never shown; read only by `apps/web/research/`. */
+  const statsRef = useRef<ScanStats>(blankScanStats(crypto.randomUUID(), new Date().toISOString()));
+
+  function bump(change: (stats: ScanStats) => void) {
+    const next = structuredClone(statsRef.current);
+    change(next);
+    statsRef.current = next;
+    const current = selectedRef.current;
+    if (savedToInventoryRef.current && current) saveScanStats(current.id, next);
+  }
+  const repeatPrompt = repeatPrompts[0] ?? null;
+  /** Object URLs of the two stills shown side by side, per prompt. Revoked when the prompt goes. */
+  const thumbsRef = useRef(new Map<string, [string, string]>());
+
+  function setRepeatPrompts(next: RepeatPrompt[]) {
+    const kept = new Set(next.map((prompt) => prompt.id));
+    for (const [id, urls] of thumbsRef.current) {
+      if (kept.has(id)) continue;
+      for (const url of urls) if (url) URL.revokeObjectURL(url);
+      thumbsRef.current.delete(id);
+    }
+    repeatPromptsRef.current = next;
+    setRepeatPromptsState(next);
+  }
   const [zoomRange, setZoomRange] = useState<ZoomRange | null>(null);
   const [zoom, setZoom] = useState(1);
   const [needsRetry, setNeedsRetry] = useState(false);
@@ -327,6 +432,12 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
+  useEffect(() => {
+    if (phase === "paused") void askBelongs();
+    // On each pause, once per room; askBelongs reads refs for the rest.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
   function stopCamera() {
     tapRef.current?.stop();
     tapRef.current = null;
@@ -374,6 +485,7 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
     body.set("parts", "0");
     body.set("focus", JSON.stringify(focusNames()));
     body.set("known", JSON.stringify(knownSoFar(combinedRef.current)));
+    if (piece.rooms.length > 0) body.set("rooms", JSON.stringify(piece.rooms));
     body.set("inventoryId", current.id);
     try {
       const response = await fetch("/api/scan/review", { method: "POST", body });
@@ -418,10 +530,15 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
     }
   }
 
-  async function priceAll(lines: LineToPrice[], idsByKey: Map<string, string[]>) {
+  async function priceAll(lines: LineToPrice[], idsByKey: Map<string, string[]>, descriptions: string[]) {
     for (let start = 0; start < lines.length; start += PRICE_BATCH) {
-      const priced = await postPrices(lines.slice(start, start + PRICE_BATCH));
-      if (priced.length > 0 && combinedRef.current) combinedRef.current = applyPrices(combinedRef.current, priced, idsByKey);
+      const slice = lines.slice(start, start + PRICE_BATCH);
+      // A timed-out batch is not "sent". One retry, and a second miss leaves the lines for the next pass.
+      let priced = await postPrices(slice);
+      if (priced.length === 0) priced = await postPrices(slice);
+      if (priced.length === 0 || !combinedRef.current) continue;
+      combinedRef.current = applyPrices(combinedRef.current, priced, idsByKey);
+      for (const description of descriptions.slice(start, start + PRICE_BATCH)) pricingRef.current.sent.add(description);
     }
   }
 
@@ -432,10 +549,9 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
     combinedRef.current = shareKnownPrices(combinedRef.current);
     const { lines, idsByKey, descriptions } = linesToPrice(combinedRef.current, pricing.sent);
     if (lines.length === 0) return;
-    if (modeRef.current !== "done" && lines.length < 12) return;
-    for (const description of descriptions) pricing.sent.add(description);
+    if (modeRef.current !== "done" && lines.length < 8) return;
     pricing.running = true;
-    void priceAll(lines, idsByKey).finally(() => {
+    void priceAll(lines, idsByKey, descriptions).finally(() => {
       pricing.running = false;
       const more = combinedRef.current ? linesToPrice(combinedRef.current, pricing.sent).lines.length : 0;
       if (more > 0) schedulePricing();
@@ -494,17 +610,27 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
       focusIds.length > 0 ? "focus" : hadClipsRef.current ? "append" : "replace",
       focusIds,
     );
+    if (roomPromptsRef.current.length > 0) addRoomQuestions(current.id, roomPromptsRef.current);
+    for (const [aId, bId] of pendingJoinsRef.current) joinLines(current.id, aId, bId);
+    const crossJoined = pendingJoinsRef.current.length;
+    pendingJoinsRef.current = [];
+    statsRef.current = { ...statsRef.current, mergedAtDone: statsRef.current.mergedAtDone + crossJoined, endedAt: new Date().toISOString() };
+    saveScanStats(current.id, statsRef.current);
+    if (walkCompareRef.current) setWalkCompare(current.id, walkCompareRef.current);
+    if (repeatPromptsRef.current.length > 0) {
+      addRepeatQuestions(
+        current.id,
+        repeatPromptsRef.current.map(({ checking: _checking, cross: _cross, ...question }) => question),
+      );
+    }
     router.push("/");
     void (async () => {
       try {
+        await stampChainRef.current;
         await stampStills(current.id, review);
-        await identifyHighValue(current.id, review);
-        setScanReview(
-          current.id,
-          review,
-          focusIds.length > 0 ? "focus" : hadClipsRef.current ? "append" : "replace",
-          focusIds,
-        );
+        // Seal as soon as the pictures are on the lines. The label reads below are slow, and a phone
+        // that locks during them used to leave the scan unsealed, as test 2b still is.
+        setScanReview(current.id, review, "refresh");
         rememberReview(review);
         const sealedAt = new Date().toISOString();
         const recordHash = await sha256Hex(
@@ -520,10 +646,18 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
           }),
         );
         sealRecord(current.id, recordHash, sealedAt);
+        await identifyHighValue(current.id, review);
+        setScanReview(current.id, review, "refresh");
       } finally {
         markProcessing(current.id, false);
       }
     })();
+  }
+
+  function keepTappedRooms<T extends { rooms: { from: string; to: string }[] }>(answer: T): T {
+    const earlier = selectedRef.current?.clips.flatMap((clip) => (clip.rooms ?? []).map((marker) => marker.room)) ?? [];
+    const now = partsRef.current.flatMap((part) => part.rooms.map((marker) => marker.room));
+    return withoutTappedFolds(answer, [...earlier, ...now]);
   }
 
   /** After Done: every clip listed and priced, then one repeat check, then the last prices. */
@@ -537,17 +671,45 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
         if (combinedRef.current && focusIds.length === 0) {
           showProgress("Checking brands and repeats");
           const answer = await postReconcile(combinedRef.current);
-          if (answer && combinedRef.current) combinedRef.current = applyReconcile(combinedRef.current, answer).review;
+          if (combinedRef.current) {
+            let next = combinedRef.current;
+            if (answer) next = applyReconcile(next, keepTappedRooms(answer)).review;
+            // The same object in two rooms or under two names: strong identity merges, anything weaker is asked.
+            const sure = repeatPairs(next.rooms).filter((pair) => pair.sure && !declinedRepeatsRef.current.has(pairKey(pair.aId, pair.bId)));
+            if (sure.length > 0) {
+              const merged = joinSurePairs(next, sure);
+              next = merged.review;
+              bump((stats) => void (stats.mergedAtDone += merged.joined));
+            }
+            combinedRef.current = next;
+            queueRepeats(next, repeatPairs(next.rooms), false);
+            // Scan more: the new walk against the lines already saved on this inventory.
+            const saved = hadClipsRef.current ? (selectedRef.current?.rooms ?? []) : [];
+            if (saved.length > 0) {
+              const cross = crossPairs(saved, next.rooms).filter((pair) => !declinedRepeatsRef.current.has(pairKey(pair.aId, pair.bId)));
+              pendingJoinsRef.current = [...pendingJoinsRef.current, ...cross.filter((pair) => pair.sure).map((pair): [string, string] => [pair.aId, pair.bId])];
+              queueRepeats(
+                { rooms: [...saved, ...next.rooms] },
+                cross.filter((pair) => !pair.sure),
+                true,
+              );
+              // Before and after: every saved line, against what this walk saw and which rooms it entered.
+              const entered = [...partsRef.current.flatMap((part) => part.rooms.map((marker) => marker.room)), ...next.rooms.map((room) => room.title)];
+              const earlier = (selectedRef.current?.clips ?? []).map((clip) => clip.startedAt).sort()[0] ?? null;
+              walkCompareRef.current = compareWalks(saved, next.rooms, cross, entered, earlier);
+            }
+          }
         }
         if (combinedRef.current) {
           combinedRef.current = shareKnownPrices(combinedRef.current);
           const { lines, idsByKey, descriptions } = linesToPrice(combinedRef.current, pricingRef.current.sent);
           if (lines.length > 0) {
             showProgress("Checking local prices");
-            for (const description of descriptions) pricingRef.current.sent.add(description);
-            await priceAll(lines, idsByKey);
+            await priceAll(lines, idsByKey, descriptions);
           }
         }
+        // A line the web price lifted over $250 is read twice too. The answers land after the save.
+        readTwiceNew();
       } finally {
         finishSession();
       }
@@ -600,6 +762,45 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
     stillsRef.current.clear();
   }
 
+  /**
+   * Stills are saved while filming, clip by clip, so a line has its picture before Done. The last clip's
+   * stills are saved at Done by `stampStills`. A line merged since keeps the picture under its own id.
+   */
+  const stampChainRef = useRef<Promise<void>>(Promise.resolve());
+  function stampClip(clipId: string) {
+    const current = selectedRef.current;
+    const review = combinedRef.current;
+    if (!current || !review) return;
+    const frames = stillsRef.current.get(clipId) ?? [];
+    if (frames.length === 0) return;
+    const jobs: { id: string; blob: Blob }[] = [];
+    for (const item of review.rooms.flatMap((room) => room.items)) {
+      if (item.photoPath) continue;
+      const sighting = item.sightings.find((entry) => entry.clipId === clipId && entry.atSec != null);
+      if (!sighting || sighting.atSec == null) continue;
+      const blob = nearestStill(frames, sighting.atSec);
+      if (blob) jobs.push({ id: item.id, blob });
+    }
+    if (jobs.length === 0) return;
+    const inventoryId = current.id;
+    stampChainRef.current = stampChainRef.current.then(async () => {
+      for (let index = 0; index < jobs.length; index += 4) {
+        await Promise.all(
+          jobs.slice(index, index + 4).map(async ({ id, blob }) => {
+            const path = await saveMedia(inventoryId, `${id.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}.jpg`, blob);
+            if (!path) return;
+            const now = combinedRef.current;
+            const line = now?.rooms.flatMap((room) => room.items).find((entry) => entry.id === id);
+            if (line && !line.photoPath) {
+              line.photoPath = path;
+              line.photoUrl = URL.createObjectURL(blob);
+            }
+          }),
+        );
+      }
+    });
+  }
+
   async function identifyHighValue(inventoryId: string, review: ReviewResult) {
     const current = selectedRef.current;
     if (!current) return;
@@ -637,6 +838,10 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
         const piece = partsRef.current[index];
         if (!result || !piece) break;
         const review = tagReview(result.review, piece.id);
+        bump((stats) => {
+          stats.clips += 1;
+          stats.listedLines += lineCount(review);
+        });
         const hash = await sha256Hex(await piece.blob.arrayBuffer());
         hashesRef.current[index] = hash;
         addClip({
@@ -650,10 +855,15 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
           storagePath: null,
           posterPath: null,
           spoken: result.spoken,
+          ...(piece.rooms.length > 0 ? { rooms: piece.rooms } : {}),
         });
         const inventoryId = selectedRef.current?.id;
         if (inventoryId) void keepMedia(inventoryId, piece.id, piece);
         combinedRef.current = combinedRef.current ? combinePieceReviews(combinedRef.current, review) : review;
+        offerRoomChange(result.roomHint ?? null, piece, index + 1);
+        liveRepeats();
+        stampClip(piece.id);
+        readTwiceNew();
         resultsRef.current.delete(index);
         appliedCountRef.current = index + 1;
         nextAsk(combinedRef.current, index + 1);
@@ -711,6 +921,7 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
     chunksRef.current = [];
     segmentStartedAtRef.current = new Date().toISOString();
     piecePosterRef.current = "";
+    markersRef.current = roomRef.current ? [{ atMs: 0, room: roomRef.current }] : [];
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) chunksRef.current.push(event.data);
     };
@@ -727,6 +938,7 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
       const blob = new Blob(chunks, { type: recorder.mimeType || "video/mp4" });
       tapRef.current?.setOn(false);
       const audio = tapRef.current?.take() ?? null;
+      const rooms = markersRef.current.slice(0, 20);
       if (blob.size > 1000) {
         partsRef.current.push({
           id: segmentId,
@@ -735,6 +947,7 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
           startedAt: segmentStartedAtRef.current,
           durationMs: Math.max(0, clockRef.current.clipMs),
           posterUrl: piecePosterRef.current,
+          rooms,
         });
       }
       clockRef.current = afterClip(clockRef.current);
@@ -857,6 +1070,314 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
     }
   }
 
+  /**
+   * Queue a room-change question. It is asked on the camera, then on the finishing screen after Done.
+   * One still waiting when the scan is saved goes onto the inventory and is asked there.
+   */
+  function offerRoomChange(hint: RoomHint | null, piece: RecordedPiece, clip: number) {
+    if (!hint) return;
+    const tapped = roomAt(piece.rooms, hint.atSec);
+    if (!tapped || declinedRoomsRef.current.has(hint.room.toLowerCase())) return;
+    if (roomPromptsRef.current.some((prompt) => prompt.clipId === piece.id)) return;
+    const question: RoomPrompt = { id: crypto.randomUUID(), clipId: piece.id, clip, atSec: hint.atSec, room: hint.room, tapped };
+    const current = selectedRef.current;
+    if (savedToInventoryRef.current) {
+      if (current) addRoomQuestions(current.id, [question]);
+      return;
+    }
+    setRoomPrompts([...roomPromptsRef.current, question]);
+    bump((stats) => void (stats.roomPrompts.asked += 1));
+  }
+
+  function noteRoom(text: string) {
+    setRoomNoteText(text);
+    if (roomNoteTimerRef.current) window.clearTimeout(roomNoteTimerRef.current);
+    roomNoteTimerRef.current = window.setTimeout(() => setRoomNoteText(""), 5000);
+  }
+
+  /** Yes to the prompt: that clip's lines from that second move, and filming goes on in that room. */
+  function acceptRoomChange() {
+    const prompt = roomPromptsRef.current[0];
+    if (!prompt) return;
+    setRoomPrompts(roomPromptsRef.current.slice(1));
+    bump((stats) => void (stats.roomPrompts.accepted += 1));
+    const current = selectedRef.current;
+    let moved = 0;
+    if (savedToInventoryRef.current) {
+      if (current) moved = answerRoomQuestion(current.id, prompt.id, true);
+    } else if (combinedRef.current) {
+      const result = moveClipLines(combinedRef.current, prompt.clipId, prompt.atSec, prompt.tapped, prompt.room);
+      combinedRef.current = result.review;
+      moved = result.moved;
+      const piece = partsRef.current.find((part) => part.id === prompt.clipId);
+      if (piece) {
+        piece.rooms = withMarker(piece.rooms, Math.round(prompt.atSec * 1000), prompt.room);
+        if (current) updateClip(current.id, piece.id, { rooms: piece.rooms });
+      }
+      showProgress();
+    }
+    noteRoom(
+      moved > 0
+        ? `Moved ${moved} ${moved === 1 ? "line" : "lines"} from clip ${prompt.clip} to ${prompt.room}.`
+        : `Nothing moved. Those lines were also seen in another clip, so they stay in ${prompt.tapped}.`,
+    );
+    if (roomRef.current === prompt.tapped && modeRef.current !== "done") chooseRoom(prompt.room);
+  }
+
+  function declineRoomChange() {
+    const prompt = roomPromptsRef.current[0];
+    if (!prompt) return;
+    declinedRoomsRef.current.add(prompt.room.toLowerCase());
+    setRoomPrompts(roomPromptsRef.current.slice(1));
+    bump((stats) => void (stats.roomPrompts.declined += 1));
+    const current = selectedRef.current;
+    if (savedToInventoryRef.current && current) answerRoomQuestion(current.id, prompt.id, false);
+  }
+
+  /**
+   * After each clip: the same object listed twice in this walk, in any room. A sure match is merged at
+   * once; a weaker one is asked, with Muse Spark 1.3 comparing the two stills first.
+   */
+  function liveRepeats() {
+    const current = combinedRef.current;
+    if (!current || focusIds.length > 0) return;
+    const fresh = (pair: { aId: string; bId: string }) => !declinedRepeatsRef.current.has(pairKey(pair.aId, pair.bId));
+    const sure = repeatPairs(current.rooms).filter((pair) => pair.sure && fresh(pair));
+    let next = current;
+    if (sure.length > 0) {
+      const merged = joinSurePairs(next, sure);
+      next = merged.review;
+      if (merged.joined > 0) bump((stats) => void (stats.mergedLive += merged.joined));
+      if (merged.joined > 0) noteRoom(`Merged ${merged.joined} repeat ${merged.joined === 1 ? "line" : "lines"}: the same object was listed twice.`);
+    }
+    combinedRef.current = next;
+    queueRepeats(next, repeatPairs(next.rooms), false);
+  }
+
+  /** Add weaker pairs to the waiting list, drop ones whose lines are gone, and start their photo checks. */
+  function queueRepeats(review: ReviewResult, pairs: { aId: string; bId: string; sure: boolean; reason: string }[], cross: boolean) {
+    const ids = new Set(review.rooms.flatMap((entry) => entry.items.map((line) => line.id)));
+    const sessionIds = new Set((combinedRef.current?.rooms ?? []).flatMap((entry) => entry.items.map((line) => line.id)));
+    const savedIds = new Set((selectedRef.current?.rooms ?? []).flatMap((entry) => entry.items.map((line) => line.id)));
+    const alive = (prompt: RepeatPrompt) =>
+      prompt.cross
+        ? savedIds.has(prompt.aId) && sessionIds.has(prompt.bId)
+        : sessionIds.has(prompt.aId) && sessionIds.has(prompt.bId);
+    const waiting = repeatPromptsRef.current.filter(alive);
+    const known = new Set(waiting.map((prompt) => pairKey(prompt.aId, prompt.bId)));
+    const added = repeatQuestions(
+      review.rooms,
+      pairs.filter((pair) => {
+        const key = pairKey(pair.aId, pair.bId);
+        // A sure pair still here was refused by the join rules (two categories, for one), so it is asked.
+        return ids.has(pair.aId) && ids.has(pair.bId) && !known.has(key) && !declinedRepeatsRef.current.has(key);
+      }),
+    ).map((question): RepeatPrompt => ({ ...question, checking: false, cross }));
+    setRepeatPrompts([...waiting, ...added].slice(0, 20));
+    if (added.length > 0) bump((stats) => void (stats.repeatsAsked += added.length));
+    for (const prompt of added) void checkRepeat(prompt);
+  }
+
+  function findLine(id: string) {
+    const lines = [...(combinedRef.current?.rooms ?? []), ...(selectedRef.current?.rooms ?? [])].flatMap((entry) => entry.items);
+    return lines.find((line) => line.id === id) ?? null;
+  }
+
+  /** The still kept from this scan at the second the line was clearest, or the line's saved photo. */
+  async function stillOf(id: string) {
+    const line = findLine(id);
+    if (!line) return null;
+    for (const sighting of line.sightings) {
+      const frames = sighting.clipId ? stillsRef.current.get(sighting.clipId) : undefined;
+      const blob = frames?.length ? nearestStill(frames, sighting.atSec ?? 0) : null;
+      if (blob) return blob;
+    }
+    return photoBlob(line.photoUrl);
+  }
+
+  async function checkRepeat(prompt: RepeatPrompt) {
+    const current = selectedRef.current;
+    if (!current || photoChecksRef.current >= PHOTO_CHECKS_PER_SCAN) return;
+    const [a, b] = await Promise.all([stillOf(prompt.aId), stillOf(prompt.bId)]);
+    if (!a || !b) return;
+    photoChecksRef.current += 1;
+    thumbsRef.current.set(prompt.id, [URL.createObjectURL(a), URL.createObjectURL(b)]);
+    const mark = (patch: Partial<RepeatPrompt>) =>
+      setRepeatPrompts(repeatPromptsRef.current.map((entry) => (entry.id === prompt.id ? { ...entry, ...patch } : entry)));
+    mark({ checking: true });
+    const lineA = findLine(prompt.aId);
+    const lineB = findLine(prompt.bId);
+    const check = await askSameObject(
+      current.id,
+      { name: prompt.aName, room: prompt.aRoom, detail: lineA?.detail ?? "", image: a },
+      { name: prompt.bName, room: prompt.bRoom, detail: lineB?.detail ?? "", image: b },
+    );
+    if (repeatPromptsRef.current.some((entry) => entry.id === prompt.id)) {
+      mark({ checking: false, check });
+    }
+    if (check) bump((stats) => void (stats.photoChecks[check.verdict] += 1));
+    if (check && savedToInventoryRef.current) setRepeatCheck(current.id, prompt.id, check);
+  }
+
+  /** Lines asked to be read twice in this scan, so none is read again. */
+  const readRequestedRef = useRef(new Set<string>());
+
+  /** Rooms already asked "what usually belongs here", and things the person said are not here. */
+  const belongsAskedRef = useRef(new Set<string>());
+  const notHereRef = useRef(new Set<string>());
+  const [belongs, setBelongs] = useState<(BelongsQuestion & { room: string })[]>([]);
+
+  /**
+   * On a pause, once per room: Muse Spark 1.3 gets the room name and what is listed in it, and returns up
+   * to three things a room like that usually has that were not filmed. They are questions. Nothing on
+   * screen says the list is complete.
+   */
+  async function askBelongs() {
+    const current = selectedRef.current;
+    const review = combinedRef.current;
+    if (!current || !review || focusIds.length > 0) return;
+    const roomTitle = roomRef.current ?? review.rooms[review.rooms.length - 1]?.title ?? "";
+    if (!roomTitle || roomTitle === ROOM_NOT_SET || belongsAskedRef.current.has(roomTitle.toLowerCase())) return;
+    const lines = review.rooms
+      .filter((entry) => entry.title.toLowerCase() === roomTitle.toLowerCase())
+      .flatMap((entry) => entry.items.map((line) => line.name));
+    if (lines.length === 0) return;
+    belongsAskedRef.current.add(roomTitle.toLowerCase());
+    try {
+      const response = await fetch("/api/scan/belongs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: roomTitle.slice(0, 80), lines: lines.slice(0, 80).map((name) => name.slice(0, 120)), inventoryId: current.id }),
+      });
+      const parsed = belongsResponseSchema.safeParse(await response.json().catch(() => null));
+      if (!response.ok || !parsed.success) return;
+      const fresh = withoutNotHere(parsed.data.questions, roomTitle, notHereRef.current).map((question) => ({ ...question, room: roomTitle }));
+      if (fresh.length > 0) {
+        setBelongs((waiting) => [...waiting, ...fresh].slice(0, 6));
+        bump((stats) => void (stats.belongs.asked += fresh.length));
+      }
+    } catch {
+      // A reminder that did not come back is not shown. Filming is not affected.
+    }
+  }
+
+  function answerBelongs(notHere: boolean) {
+    if (notHere) bump((stats) => void (stats.belongs.notHere += 1));
+    setBelongs((waiting) => {
+      const first = waiting[0];
+      if (first && notHere) notHereRef.current.add(notHereKey(first.room, first.thing));
+      return waiting.slice(1);
+    });
+  }
+
+  /** Two different stills of one line: its clearest second, and another sighting or a second or two away. */
+  function twoStills(id: string): [Blob, Blob] | null {
+    const line = findLine(id);
+    if (!line) return null;
+    const views: { clipId: string; atSec: number }[] = line.sightings.flatMap((sighting) =>
+      sighting.clipId ? [{ clipId: sighting.clipId, atSec: sighting.atSec ?? 0 }] : [],
+    );
+    const first = views[0];
+    if (!first) return null;
+    const framesA = stillsRef.current.get(first.clipId) ?? [];
+    const a = nearestStill(framesA, first.atSec);
+    if (!a) return null;
+    const other = views.slice(1).find((view) => view.clipId !== first.clipId) ?? null;
+    if (other) {
+      const b = nearestStill(stillsRef.current.get(other.clipId) ?? [], other.atSec);
+      if (b && b !== a) return [a, b];
+    }
+    for (const offset of [2, -2, 3, -3, 1, -1]) {
+      const b = nearestStill(framesA, first.atSec + offset);
+      if (b && b !== a) return [a, b];
+    }
+    return null;
+  }
+
+  /**
+   * Read twice: every line that could be over $250 is identified twice by Muse Spark 1.3, from two stills,
+   * independently. Matching answers confirm it; answers that disagree mark it unsure, and both are kept.
+   */
+  function readTwiceNew() {
+    const current = selectedRef.current;
+    const review = combinedRef.current;
+    if (!current || !review) return;
+    for (const line of review.rooms.flatMap((room) => room.items)) {
+      if (readRequestedRef.current.size >= READ_TWICE_PER_SCAN) return;
+      if (readRequestedRef.current.has(line.id) || !needsReadTwice(line)) continue;
+      const stills = twoStills(line.id);
+      if (!stills) continue;
+      readRequestedRef.current.add(line.id);
+      const inventoryId = current.id;
+      void askReadTwice(inventoryId, {
+        a: stills[0],
+        b: stills[1],
+        category: line.category ?? "",
+        said: line.said[0]?.text ?? line.narration ?? "",
+        description: line.detail,
+      }).then((reads) => {
+        if (!reads) return;
+        const check: IdentityCheck = { result: compareReads(reads[0], reads[1]), reads, at: new Date().toISOString(), resolved: null };
+        if (savedToInventoryRef.current) {
+          setIdentityCheck(inventoryId, line.id, check);
+          return;
+        }
+        const now = combinedRef.current;
+        if (!now) return;
+        combinedRef.current = {
+          rooms: now.rooms.map((room) => ({
+            ...room,
+            items: room.items.map((item) => (item.id === line.id ? withIdentityCheck(item, check) : item)),
+          })),
+        };
+        if (check.result === "unsure") noteRoom(`${line.name}: two reads disagree. It stays unsure until you pick.`);
+      });
+    }
+  }
+
+  function acceptRepeat() {
+    const prompt = repeatPromptsRef.current[0];
+    if (!prompt) return;
+    setRepeatPrompts(repeatPromptsRef.current.slice(1));
+    const current = selectedRef.current;
+    if (savedToInventoryRef.current) {
+      if (current) answerRepeatQuestion(current.id, prompt.id, true);
+    } else if (prompt.cross) {
+      pendingJoinsRef.current = [...pendingJoinsRef.current, [prompt.aId, prompt.bId]];
+    } else if (combinedRef.current) {
+      combinedRef.current = joinRepeatPair(combinedRef.current, prompt.aId, prompt.bId).review;
+      showProgress();
+    }
+    noteRoom(`Merged into one line${prompt.aRoom === prompt.bRoom ? "" : `, seen in ${prompt.aRoom} and ${prompt.bRoom}`}.`);
+    bump((stats) => void (stats.repeatsMergedByOwner += 1));
+  }
+
+  function declineRepeat() {
+    const prompt = repeatPromptsRef.current[0];
+    if (!prompt) return;
+    declinedRepeatsRef.current.add(pairKey(prompt.aId, prompt.bId));
+    setRepeatPrompts(repeatPromptsRef.current.slice(1));
+    bump((stats) => void (stats.repeatsKept += 1));
+    const current = selectedRef.current;
+    if (savedToInventoryRef.current && current) answerRepeatQuestion(current.id, prompt.id, false);
+  }
+
+  /** The room from this second of the clip on. While paused, the next clip starts in it. */
+  function chooseRoom(title: string) {
+    const next = title.replace(/\s+/g, " ").trim().slice(0, 80);
+    if (!next) return;
+    roomRef.current = next;
+    setRoom(next);
+    setMoreOpen(false);
+    setNewRoom("");
+    declinedRoomsRef.current.clear();
+    if (modeRef.current !== "recording" || closingRef.current) return;
+    const atMs = Math.max(0, Math.round(clockRef.current.clipMs));
+    const kept = markersRef.current.filter((marker) => marker.atMs < atMs);
+    if (kept[kept.length - 1]?.room === next) return;
+    markersRef.current = [...kept, { atMs, room: next }].slice(-20);
+  }
+
   function changeZoom(direction: 1 | -1) {
     const range = zoomRange;
     const track = streamRef.current?.getVideoTracks()[0];
@@ -902,6 +1423,23 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
       tapRef.current = narrationTap(stream);
       recordStreamRef.current = scaled?.stream ?? stream;
       dismissedRef.current.clear();
+      roomRef.current = null;
+      markersRef.current = [];
+      declinedRoomsRef.current.clear();
+      declinedRepeatsRef.current.clear();
+      pendingJoinsRef.current = [];
+      walkCompareRef.current = null;
+      statsRef.current = blankScanStats(crypto.randomUUID(), new Date().toISOString());
+      photoChecksRef.current = 0;
+      readRequestedRef.current.clear();
+      belongsAskedRef.current.clear();
+      notHereRef.current.clear();
+      setBelongs([]);
+      setRepeatPrompts([]);
+      setRoom(null);
+      setMoreOpen(false);
+      setRoomPrompts([]);
+      setRoomNoteText("");
       setLiveAsk(null);
       setSnapNote("");
       partsRef.current = [];
@@ -1035,6 +1573,62 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
 
   if (!selected) return null;
 
+  function roomPromptCard(className: string) {
+    if (!roomPrompt) return null;
+    const switching = modeRef.current !== "done" && room !== roomPrompt.room && roomRef.current === roomPrompt.tapped;
+    return (
+      <div className={className} role="status" aria-live="polite">
+        <p>
+          Clip {roomPrompt.clip} looks like {roomPrompt.room} from {formatClock(roomPrompt.atSec * 1000)}, but {roomPrompt.tapped} was tapped.
+          {roomPrompts.length > 1 ? ` ${roomPrompts.length - 1} more after this.` : ""}
+        </p>
+        <div className="film-room-hint-actions">
+          <button type="button" className="film-room is-add" onClick={acceptRoomChange}>
+            {switching ? `Switch to ${roomPrompt.room}` : `Move those lines to ${roomPrompt.room}`}
+          </button>
+          <button type="button" className="film-room" onClick={declineRoomChange}>
+            Keep {roomPrompt.tapped}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function repeatPromptCard(className: string) {
+    if (!repeatPrompt || roomPrompt) return null;
+    const thumbs = thumbsRef.current.get(repeatPrompt.id);
+    const verdict = verdictText(repeatPrompt.check, repeatPrompt.checking);
+    return (
+      <div className={className} role="status" aria-live="polite">
+        <p>
+          Possible repeat: {repeatPrompt.aName} in {repeatPrompt.aRoom} and {repeatPrompt.bName} in {repeatPrompt.bRoom}. {repeatPrompt.reason}
+          {repeatPrompts.length > 1 ? ` ${repeatPrompts.length - 1} more after this.` : ""}
+        </p>
+        {thumbs ? (
+          <div className="repeat-pair">
+            {thumbs.map((url, index) => (
+              <div className="repeat-side" key={url}>
+                {/* Stills from this scan, still on this device. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={url} alt="" />
+                <strong>{index === 0 ? repeatPrompt.aName : repeatPrompt.bName}</strong>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {verdict ? <p className="repeat-verdict">{verdict}</p> : null}
+        <div className="film-room-hint-actions">
+          <button type="button" className="film-room is-add" onClick={acceptRepeat}>
+            Same item
+          </button>
+          <button type="button" className="film-room" onClick={declineRepeat}>
+            Two items
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="recorder">
       {phase === "idle" ? (
@@ -1086,6 +1680,99 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
                     <path d="M14.6 10.6v2.2h-2.2M9.4 15.4v-2.2h2.2" />
                   </svg>
                 </button>
+              </div>
+              <div className="film-rooms">
+                <div className="film-room-row" role="group" aria-label="Room you are in">
+                  <div className="film-room-scroll">
+                    {DEMO_ROOMS.map((title) => (
+                      <button
+                        key={title}
+                        type="button"
+                        className={room === title ? "film-room is-on" : "film-room"}
+                        aria-pressed={room === title}
+                        onClick={() => chooseRoom(title)}
+                      >
+                        {title}
+                      </button>
+                    ))}
+                    {room && !(DEMO_ROOMS as readonly string[]).includes(room) ? (
+                      <button type="button" className="film-room is-on" aria-pressed="true" onClick={() => setMoreOpen((open) => !open)}>
+                        {room}
+                      </button>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    className={moreOpen ? "film-room is-more is-open" : "film-room is-more"}
+                    aria-expanded={moreOpen}
+                    onClick={() => setMoreOpen((open) => !open)}
+                  >
+                    More
+                  </button>
+                </div>
+                {moreOpen ? (
+                  <div className="film-room-more">
+                    <div className="film-room-grid">
+                      {MORE_ROOMS.map((title) => (
+                        <button
+                          key={title}
+                          type="button"
+                          className={room === title ? "film-room is-on" : "film-room"}
+                          aria-pressed={room === title}
+                          onClick={() => chooseRoom(title)}
+                        >
+                          {title}
+                        </button>
+                      ))}
+                    </div>
+                    <form
+                      className="film-room-add"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        chooseRoom(newRoom);
+                      }}
+                    >
+                      <input
+                        className="film-room-input"
+                        value={newRoom}
+                        maxLength={80}
+                        placeholder="Add a room"
+                        aria-label="Add a room"
+                        enterKeyHint="done"
+                        onChange={(event) => setNewRoom(event.target.value)}
+                      />
+                      <button type="submit" className="film-room is-add" disabled={!newRoom.trim()}>
+                        Add
+                      </button>
+                    </form>
+                  </div>
+                ) : null}
+                {roomPromptCard("film-room-hint")}
+                {phase === "paused" ? repeatPromptCard("film-room-hint") : null}
+                {phase === "paused" && !roomPrompt && !repeatPrompt && belongs[0] ? (
+                  <div className="film-room-hint" role="status" aria-live="polite">
+                    <p>
+                      {belongs[0].question}
+                      {belongs[0].reason ? ` ${belongs[0].reason}` : ""}
+                    </p>
+                    <p className="repeat-verdict">A reminder from Muse Spark 1.3 for {belongs[0].room}. Film it, say it, or skip it.</p>
+                    <div className="film-room-hint-actions">
+                      <button type="button" className="film-room is-add" onClick={() => answerBelongs(false)}>
+                        I will film it
+                      </button>
+                      <button type="button" className="film-room" onClick={() => answerBelongs(true)}>
+                        Not here
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {!roomPrompt && roomNoteText ? <p className="film-room-nudge">{roomNoteText}</p> : null}
+                {!roomPrompt && !roomNoteText && room == null && !moreOpen ? <p className="film-room-nudge">Tap the room you are in</p> : null}
+                {phase === "recording" && !roomPrompt && repeatPrompts.length > 0 ? (
+                  <p className="film-room-nudge">
+                    {repeatPrompts.length} possible {repeatPrompts.length === 1 ? "repeat" : "repeats"}. Pause to check.
+                  </p>
+                ) : null}
               </div>
               {zoomRange ? (
                 <div className="film-zoom" role="group" aria-label="Zoom">
@@ -1181,6 +1868,9 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
           </div>
         </div>
       ) : null}
+      {phase === "reviewing" ? roomPromptCard("sheet room-question") : null}
+      {phase === "reviewing" ? repeatPromptCard("sheet room-question") : null}
+      {phase === "reviewing" && !roomPrompt && roomNoteText ? <p className="hint">{roomNoteText}</p> : null}
       {phase === "reviewed" && selected ? (
         <>
           <ItemizedRooms
@@ -1194,8 +1884,8 @@ export function Recorder({ onBack, focusIds = [], autoStart = false }: { onBack:
             onAddItem={addRoomItem}
             clips={selected.clips}
             onEvidence={applyEvidence}
-            onSkip={skipRequest}
             onSaveMedia={saveMedia}
+            onResolveIdentity={(itemId, pick) => resolveIdentityCheck(selected.id, itemId, pick)}
           />
           <button type="button" className="button brand record-action" onClick={() => router.push("/")}>
             My inventory

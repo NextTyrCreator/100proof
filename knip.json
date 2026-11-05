@@ -3,7 +3,7 @@
   "workspaces": {
     "apps/web": {
       "entry": ["app/**/{page,layout,loading,error,not-found,route}.{ts,tsx}", "middleware.ts", "next.config.{ts,mjs}", "scripts/**/*.ts"],
-      "project": ["{app,components,lib,scripts}/**/*.{ts,tsx}", "middleware.ts"]
+      "project": ["{app,components,lib,scripts,research}/**/*.{ts,tsx}", "middleware.ts"]
     },
     "apps/*": { "entry": ["src/app/**/*.{ts,tsx}", "src/index.ts"], "project": ["src/**/*.{ts,tsx}"] },
     "packages/*": { "entry": ["src/index.ts"], "project": ["src/**/*.ts"] }

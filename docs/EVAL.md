@@ -70,7 +70,7 @@ A repeated walk of one 2,600 sq ft house, both yards, the hand-inventory baselin
 1. Open the phone tunnel URL in Safari or Chrome. Sign in with the email code.
 2. Add an inventory. Choose the address and allow location when asked on Next.
 3. Before filming, write the truth list for one room on paper: each thing, how many, brand and model when known. Start a stopwatch.
-4. Film the room in 30-second clips, under 10 minutes, saying the room, the brand, the year bought, and the price paid of anything that matters. Watch that the scanner names what is in view.
+4. Film the room in 30-second clips, up to 15 minutes, saying the room, the brand, the year bought, and the price paid of anything that matters. Tap the room chip when you enter each room. Watch that the scanner names what is in view.
 5. Answer the live requests while filming, or "Not now". After the last clip, work the "Worth a minute" list: add photos and receipts, answer questions, film a wider clip when asked, or "Leave it". Try Connections with one receipt file.
 6. Stop the stopwatch when you would hand the file to an adjuster. Write down the minutes you were actually doing something (hands-on) and the minutes you waited for a review.
 7. Open View summary → Measures. Copy the numbers into the table below and download the Claim file (JSON).
